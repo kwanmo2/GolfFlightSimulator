@@ -2,6 +2,10 @@
 
 Babylon.js + TypeScript + Vite demo for visualizing launch-monitor-style golf shots in a browser. The product goal is believable, stable shot analysis, not a full golf game.
 
+## Screenshot
+
+![Golf Flight Demo execution screen](./assets/Figure1.png)
+
 ## Features
 
 - Browser-based 3D hole scene with rolling terrain, fairway corridor, green complex, bunkers, tree line, flag, tee markers, and distance markers
