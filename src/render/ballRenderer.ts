@@ -16,6 +16,9 @@ export interface BallRenderer {
   update(frame: SimulationFrame): void;
 }
 
+/** Visual terrain height at a point; the physics ground is the y = 0 plane. */
+export type GroundHeightResolver = (x: number, z: number) => number;
+
 const createDimpleNormalTexture = (
   scene: Scene,
   size = 256,
@@ -89,7 +92,11 @@ const createUrethaneBallMaterial = (scene: Scene): PBRMaterial => {
   return material;
 };
 
-export const createBallRenderer = (scene: Scene, radiusM: number): BallRenderer => {
+export const createBallRenderer = (
+  scene: Scene,
+  radiusM: number,
+  groundHeightAt: GroundHeightResolver,
+): BallRenderer => {
   const mesh = MeshBuilder.CreateSphere(
     "golf-ball",
     {
@@ -119,14 +126,17 @@ export const createBallRenderer = (scene: Scene, radiusM: number): BallRenderer 
   return {
     mesh,
     update(frame) {
+      // Lift by the drawn terrain so the ball rests on the rendered surface;
+      // the simulation itself still runs against flat ground.
+      const groundY = groundHeightAt(frame.position.x, frame.position.z);
       mesh.position.copyFromFloats(
         frame.position.x,
-        frame.position.y,
+        frame.position.y + groundY,
         frame.position.z,
       );
 
       mesh.rotation.z += 0.028;
-      shadow.position.copyFrom(new Vector3(frame.position.x, 0.01, frame.position.z));
+      shadow.position.copyFrom(new Vector3(frame.position.x, groundY + 0.01, frame.position.z));
       shadow.scaling.x = 1 + Math.min(frame.position.y * 0.04, 2.4);
       shadow.scaling.y = shadow.scaling.x;
       shadow.visibility = Math.max(0.28, 1 - Math.min(frame.position.y / 90, 0.62));

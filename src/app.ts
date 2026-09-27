@@ -61,11 +61,17 @@ export class GolfFlightApp {
 
   public constructor(canvas: HTMLCanvasElement, uiRoot: HTMLElement) {
     this.sceneController = createSceneController(canvas);
+    const groundHeightAt = (x: number, z: number): number =>
+      this.sceneController.getGroundHeightAt(x, z);
     this.ballRenderer = createBallRenderer(
       this.sceneController.scene,
       this.physicsConfig.ball.radiusM,
+      groundHeightAt,
     );
-    this.trajectoryRenderer = createTrajectoryRenderer(this.sceneController.scene);
+    this.trajectoryRenderer = createTrajectoryRenderer(
+      this.sceneController.scene,
+      groundHeightAt,
+    );
     this.sceneController.attachFollowTarget(this.ballRenderer.mesh);
     this.sceneController.setActiveCamera(this.cameraMode);
 
@@ -277,7 +283,7 @@ export class GolfFlightApp {
 
     this.ballRenderer.update(frame);
     this.trajectoryRenderer.highlightFrame(frame.position);
-    this.sceneController.updateReplayCamera(frame, this.simulation.metrics, this.cameraMode);
+    this.sceneController.updateReplayCamera(frame, this.simulation.metrics);
     this.debugPanel.setRuntimeStats({
       frame,
       metrics: this.simulation.metrics,

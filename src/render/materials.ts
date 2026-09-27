@@ -1,25 +1,26 @@
 import {
   Color3,
+  Constants,
   DynamicTexture,
+  RawTexture,
   Scene,
   StandardMaterial,
   Texture,
 } from "@babylonjs/core";
 import type { FieldModel, SurfaceWeights } from "./terrain";
+import { TerrainSplatPlugin } from "./terrainSplatPlugin";
 
 export interface FieldMaterials {
   terrain: StandardMaterial;
-  greenPatch: StandardMaterial;
-  bunkerPatch: StandardMaterial;
-  teePatch: StandardMaterial;
+  backdrop: StandardMaterial;
   sky: StandardMaterial;
   flag: StandardMaterial;
   pole: StandardMaterial;
-  cup: StandardMaterial;
+  cupHole: StandardMaterial;
+  cupRim: StandardMaterial;
+  teeMarker: StandardMaterial;
   treeTrunk: StandardMaterial;
-  treeLeafNear: StandardMaterial;
-  treeLeafMid: StandardMaterial;
-  treeLeafFar: StandardMaterial;
+  treeCanopy: StandardMaterial;
   grassCard: StandardMaterial;
 }
 
@@ -29,24 +30,46 @@ interface RgbColor {
   b: number;
 }
 
-const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+/** Tiled CC0 textures from ambientCG; see public/textures/LICENSE.md. */
+const TEXTURE_ROOT = "/textures/";
+const TEXTURE_ANISOTROPY = 8;
+
+// Terrain lookup textures cover the whole 540 x 660 m field, so a texel is
+// about half a metre. Fine detail comes from the tiled textures instead.
+const LOOKUP_WIDTH = 1024;
+const LOOKUP_HEIGHT = 2048;
+/** Tint maps encode a multiplier around 1.0 as bytes centred on this value. */
+const TINT_NEUTRAL = 128;
+/** Horizontal direction toward the sun (see SUN_LIGHT_DIRECTION in scene.ts). */
+const SUN_XZ = { x: 0.96, z: -0.28 };
+
+const clamp = (value: number, min: number, max: number): number =>
+  Math.max(min, Math.min(max, value));
+
+const clamp01 = (value: number): number => clamp(value, 0, 1);
+
+const smoothstep = (edge0: number, edge1: number, value: number): number => {
+  const t = clamp01((value - edge0) / (edge1 - edge0));
+  return t * t * (3 - 2 * t);
+};
 
 const hash2 = (x: number, z: number): number => {
   const value = Math.sin(x * 127.1 + z * 311.7) * 43758.5453123;
   return value - Math.floor(value);
 };
 
-const tint = (color: RgbColor, amount: number): RgbColor => ({
-  r: color.r + amount,
-  g: color.g + amount,
-  b: color.b + amount,
-});
-
-const mixColor = (a: RgbColor, b: RgbColor, alpha: number): RgbColor => ({
-  r: a.r + (b.r - a.r) * alpha,
-  g: a.g + (b.g - a.g) * alpha,
-  b: a.b + (b.b - a.b) * alpha,
-});
+/** Smooth value noise in [0, 1] from bilinear blending of hash2 on an integer lattice. */
+const valueNoise = (x: number, z: number): number => {
+  const x0 = Math.floor(x);
+  const z0 = Math.floor(z);
+  const tx = x - x0;
+  const tz = z - z0;
+  const sx = tx * tx * (3 - 2 * tx);
+  const sz = tz * tz * (3 - 2 * tz);
+  const top = hash2(x0, z0) + (hash2(x0 + 1, z0) - hash2(x0, z0)) * sx;
+  const bottom = hash2(x0, z0 + 1) + (hash2(x0 + 1, z0 + 1) - hash2(x0, z0 + 1)) * sx;
+  return top + (bottom - top) * sz;
+};
 
 const createDynamicTexture = (
   scene: Scene,
@@ -68,159 +91,254 @@ const createDynamicTexture = (
   return texture;
 };
 
-const normalizeWeights = (weights: SurfaceWeights): SurfaceWeights => {
-  const total = Math.max(
-    0.0001,
-    weights.tee +
-      weights.fairway +
-      weights.rough +
-      weights.green +
-      weights.bunker +
-      weights.fringe,
+const loadTiledTexture = (scene: Scene, fileName: string): Texture => {
+  const texture = new Texture(`${TEXTURE_ROOT}${fileName}`, scene);
+  texture.wrapU = Texture.WRAP_ADDRESSMODE;
+  texture.wrapV = Texture.WRAP_ADDRESSMODE;
+  texture.anisotropicFilteringLevel = TEXTURE_ANISOTROPY;
+  return texture;
+};
+
+/**
+ * Resolve the overlapping surface weights into an exclusive blend that sums to
+ * one. Surfaces are stacked in priority order: sand always wins where a bunker
+ * is cut into the fairway, the green over its fringe, and so on, with rough
+ * filling whatever is left.
+ */
+const layerWeights = (weights: SurfaceWeights): SurfaceWeights => {
+  let remaining = 1;
+  const take = (weight: number): number => {
+    const taken = Math.min(remaining, clamp01(weight));
+    remaining -= taken;
+    return taken;
+  };
+
+  const bunker = take(weights.bunker);
+  const green = take(weights.green);
+  const fringe = take(weights.fringe);
+  const tee = take(weights.tee);
+  const fairway = take(weights.fairway);
+  return { bunker, green, fringe, tee, fairway, rough: remaining };
+};
+
+/**
+ * Large-scale colour variation layered over the tiled detail textures: mowing
+ * stripes on the fairway, dry patches in the rough, damp sand at bunker edges.
+ * Returns a per-channel multiplier around 1.0.
+ */
+const sampleTerrainTint = (field: FieldModel, weights: SurfaceWeights, x: number, z: number): RgbColor => {
+  const stripe = Math.floor((z + 18) / 18) % 2 === 0 ? 1 : -1;
+  const largeNoise =
+    Math.sin(x * 0.05 + z * 0.006) * 0.03 +
+    Math.cos(z * 0.031 - x * 0.014) * 0.025 +
+    (valueNoise(x * 0.08, z * 0.08) - 0.5) * 0.08;
+  const microNoise = (hash2(Math.floor(x * 2), Math.floor(z * 2)) - 0.5) * 0.04;
+
+  const dryPatch = smoothstep(0.58, 0.8, valueNoise(x * 0.035 + 7.3, z * 0.035 - 2.1));
+  const roughBase = 1 + largeNoise * 1.3;
+  const rough: RgbColor = {
+    r: roughBase + dryPatch * 0.1,
+    g: roughBase + dryPatch * 0.02,
+    b: roughBase - dryPatch * 0.12,
+  };
+
+  const fairwayBase = 1 + stripe * 0.06 + largeNoise * 0.6;
+  const fairway: RgbColor = { r: fairwayBase, g: fairwayBase, b: fairwayBase };
+  const tee: RgbColor = { r: fairwayBase * 0.98, g: fairwayBase, b: fairwayBase * 0.98 };
+  const greenBase = 1 + microNoise * 0.3 + largeNoise * 0.2;
+  const green: RgbColor = { r: greenBase, g: greenBase, b: greenBase };
+  const fringeBase = 0.96 + largeNoise * 0.4;
+  const fringe: RgbColor = { r: fringeBase, g: fringeBase, b: fringeBase };
+
+  // Sand is brightest in the centre of the bunker and slightly damp at the
+  // edges; the bowl wall that faces away from the sun is shaded so the
+  // depression reads even from the high cameras.
+  const damp = smoothstep(0.35, 0.9, 1 - weights.bunker);
+  const sunWash = clamp01(
+    (field.holeLengthM - Math.abs(z - field.green.centerZ)) / field.holeLengthM,
   );
+  let wallShade = 0;
+  if (weights.bunker > 0) {
+    for (const feature of field.bunkers) {
+      const distance = field.getFeatureDistance(x, z, feature);
+      if (distance < 1.3) {
+        const offsetX = x - feature.centerX;
+        const offsetZ = z - feature.centerZ;
+        const offsetLength = Math.hypot(offsetX, offsetZ) || 1;
+        // Sun sits toward +X / -Z; walls on that side face away from it.
+        const facingAway = 0.5 + 0.5 * ((offsetX * SUN_XZ.x + offsetZ * SUN_XZ.z) / offsetLength);
+        wallShade = Math.max(wallShade, smoothstep(0.5, 1.05, distance) * facingAway);
+      }
+    }
+  }
+  const sandBase = 1 + sunWash * 0.04 + microNoise * 0.5 - damp * 0.16 - wallShade * 0.22;
+  const bunker: RgbColor = { r: sandBase, g: sandBase, b: sandBase - damp * 0.03 };
+
+  const sources: Array<[RgbColor, number]> = [
+    [tee, weights.tee],
+    [fairway, weights.fairway],
+    [rough, weights.rough],
+    [green, weights.green],
+    [fringe, weights.fringe],
+    [bunker, weights.bunker],
+  ];
+
+  const tint: RgbColor = { r: 0, g: 0, b: 0 };
+  for (const [source, weight] of sources) {
+    tint.r += source.r * weight;
+    tint.g += source.g * weight;
+    tint.b += source.b * weight;
+  }
+  return tint;
+};
+
+const encodeTint = (value: number): number =>
+  Math.round(clamp(value * TINT_NEUTRAL, 0, 255));
+
+const encodeWeight = (value: number): number => Math.round(clamp01(value) * 255);
+
+/**
+ * One pass over the field producing both terrain lookups: the splat mask read by
+ * TerrainSplatPlugin and the tint map bound as the material's diffuse texture.
+ * RawTexture keeps the mask exact; a canvas would premultiply the alpha channel.
+ */
+const createTerrainLookupTextures = (
+  scene: Scene,
+  field: FieldModel,
+): { mask: Texture; tint: Texture } => {
+  const width = LOOKUP_WIDTH;
+  const height = LOOKUP_HEIGHT;
+  const maskData = new Uint8Array(width * height * 4);
+  const tintData = new Uint8Array(width * height * 4);
+
+  for (let py = 0; py < height; py += 1) {
+    const z = (py / (height - 1) - 0.5) * field.terrainLengthM;
+    for (let px = 0; px < width; px += 1) {
+      const x = (px / (width - 1) - 0.5) * field.terrainWidthM;
+      const weights = layerWeights(field.getSurfaceWeights(x, z));
+      const tint = sampleTerrainTint(field, weights, x, z);
+      const index = (py * width + px) * 4;
+
+      maskData[index] = encodeWeight(weights.fairway + weights.tee);
+      maskData[index + 1] = encodeWeight(weights.green);
+      maskData[index + 2] = encodeWeight(weights.bunker);
+      maskData[index + 3] = encodeWeight(weights.fringe);
+
+      tintData[index] = encodeTint(tint.r);
+      tintData[index + 1] = encodeTint(tint.g);
+      tintData[index + 2] = encodeTint(tint.b);
+      tintData[index + 3] = 255;
+    }
+  }
+
+  const createLookup = (name: string, data: Uint8Array): Texture => {
+    const texture = RawTexture.CreateRGBATexture(
+      data,
+      width,
+      height,
+      scene,
+      true,
+      false,
+      Constants.TEXTURE_TRILINEAR_SAMPLINGMODE,
+    );
+    texture.name = name;
+    texture.wrapU = Texture.CLAMP_ADDRESSMODE;
+    texture.wrapV = Texture.CLAMP_ADDRESSMODE;
+    texture.anisotropicFilteringLevel = TEXTURE_ANISOTROPY;
+    return texture;
+  };
 
   return {
-    tee: weights.tee / total,
-    fairway: weights.fairway / total,
-    rough: weights.rough / total,
-    green: weights.green / total,
-    bunker: weights.bunker / total,
-    fringe: weights.fringe / total,
+    mask: createLookup("terrain-splat-mask", maskData),
+    tint: createLookup("terrain-tint-map", tintData),
   };
 };
 
-const sampleTerrainColor = (field: FieldModel, x: number, z: number): RgbColor => {
-  const weights = normalizeWeights(field.getSurfaceWeights(x, z));
-  const stripe = Math.floor((z + 18) / 18) % 2 === 0 ? 1 : -1;
-  const corridorStripe = stripe * weights.fairway * 11;
-  const largeNoise =
-    Math.sin(x * 0.05 + z * 0.006) * 4 +
-    Math.cos(z * 0.031 - x * 0.014) * 3 +
-    (hash2(Math.floor(x * 0.5), Math.floor(z * 0.5)) - 0.5) * 8;
-  const microNoise = (hash2(Math.floor(x * 2), Math.floor(z * 2)) - 0.5) * 6;
+const SKY_ZENITH = "#3b70c4";
+const SKY_MID = "#6ea6e6";
+const SKY_LOW = "#a9cdf0";
+const SKY_HORIZON = "#d6e6f4";
+const SKY_BELOW_HORIZON = "#c9d8de";
+const SKY_NADIR = "#b3c1b0";
 
-  const roughBase: RgbColor = { r: 78, g: 111, b: 49 };
-  const fairwayBase: RgbColor = { r: 112, g: 149, b: 70 };
-  const teeBase: RgbColor = { r: 103, g: 142, b: 69 };
-  const greenBase: RgbColor = { r: 95, g: 136, b: 64 };
-  const fringeBase: RgbColor = { r: 102, g: 144, b: 63 };
-  const bunkerBase: RgbColor = { r: 205, g: 188, b: 146 };
+/**
+ * Equirectangular sky for the dome: zenith at the top of the canvas, horizon
+ * at mid height. Clouds are wrapped so the seam at u = 0 is invisible, and the
+ * horizon colour matches the scene fog so distant ground fades into it.
+ */
+const createSkyTexture = (scene: Scene, sunU: number, sunV: number): DynamicTexture =>
+  createDynamicTexture(scene, "field-sky", 1024, 1024, (context, width, height) => {
+    const gradient = context.createLinearGradient(0, 0, 0, height);
+    gradient.addColorStop(0, SKY_ZENITH);
+    gradient.addColorStop(0.28, SKY_MID);
+    gradient.addColorStop(0.44, SKY_LOW);
+    gradient.addColorStop(0.5, SKY_HORIZON);
+    gradient.addColorStop(0.53, SKY_BELOW_HORIZON);
+    gradient.addColorStop(1, SKY_NADIR);
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, width, height);
 
-  let color: RgbColor = { r: 0, g: 0, b: 0 };
-  const sources: Array<[RgbColor, number]> = [
-    [tint(teeBase, largeNoise * 0.55), weights.tee],
-    [tint(fairwayBase, corridorStripe + largeNoise * 0.4), weights.fairway],
-    [tint(roughBase, largeNoise * 0.45), weights.rough],
-    [tint(greenBase, Math.sin(z * 0.18) * 2 + microNoise * 0.6), weights.green],
-    [tint(fringeBase, largeNoise * 0.38), weights.fringe],
-    [tint(bunkerBase, Math.sin((x + z) * 0.14) * 2 + microNoise * 0.35), weights.bunker],
-  ];
+    // Sun glow.
+    const sunX = sunU * width;
+    const sunY = sunV * height;
+    const glow = context.createRadialGradient(sunX, sunY, 0, sunX, sunY, width * 0.32);
+    glow.addColorStop(0, "rgba(255, 250, 235, 0.95)");
+    glow.addColorStop(0.08, "rgba(255, 245, 220, 0.55)");
+    glow.addColorStop(0.35, "rgba(255, 240, 215, 0.14)");
+    glow.addColorStop(1, "rgba(255, 240, 215, 0)");
+    context.fillStyle = glow;
+    context.fillRect(0, 0, width, height);
 
-  for (const [source, weight] of sources) {
-    color = {
-      r: color.r + source.r * weight,
-      g: color.g + source.g * weight,
-      b: color.b + source.b * weight,
-    };
-  }
+    // Clouds: soft overlapping puffs, larger and rounder near the zenith,
+    // flatter and denser near the horizon.
+    const horizonY = height * 0.5;
+    for (let cloud = 0; cloud < 70; cloud += 1) {
+      const baseX = hash2(cloud, 3.1) * width;
+      const altitude = Math.pow(hash2(cloud, 5.7), 0.7);
+      const baseY = height * 0.1 + altitude * (horizonY - height * 0.14);
+      const nearHorizon = smoothstep(0.55, 1, altitude);
+      const puffCount = 3 + Math.floor(hash2(cloud, 8.3) * 4);
+      const cloudSize = (36 + hash2(cloud, 2.9) * 70) * (1 - nearHorizon * 0.55);
+      const alpha = 0.2 + hash2(cloud, 6.1) * 0.22 + nearHorizon * 0.1;
 
-  const sunWash = clamp01((field.holeLengthM - Math.abs(z - field.green.centerZ)) / field.holeLengthM);
-  return mixColor(color, { r: 198, g: 205, b: 165 }, sunWash * weights.bunker * 0.08);
-};
+      for (let puff = 0; puff < puffCount; puff += 1) {
+        const offsetX = (hash2(cloud * 13 + puff, 1.7) - 0.5) * cloudSize * 3;
+        const offsetY = (hash2(cloud * 13 + puff, 4.3) - 0.5) * cloudSize * 0.7;
+        const radius = cloudSize * (0.6 + hash2(cloud * 13 + puff, 9.9) * 0.6);
+        const squash = 0.55 - nearHorizon * 0.3;
 
-const createTerrainColorTexture = (scene: Scene, field: FieldModel): DynamicTexture =>
-  createDynamicTexture(scene, "terrain-color-map", 1024, 2048, (context, width, height) => {
-    const image = context.createImageData(width, height);
-
-    for (let py = 0; py < height; py += 1) {
-      for (let px = 0; px < width; px += 1) {
-        const x = (px / (width - 1) - 0.5) * field.terrainWidthM;
-        const z = (py / (height - 1) - 0.5) * field.terrainLengthM;
-        const color = sampleTerrainColor(field, x, z);
-        const index = (py * width + px) * 4;
-        image.data[index] = Math.max(0, Math.min(255, Math.round(color.r)));
-        image.data[index + 1] = Math.max(0, Math.min(255, Math.round(color.g)));
-        image.data[index + 2] = Math.max(0, Math.min(255, Math.round(color.b)));
-        image.data[index + 3] = 255;
+        for (const wrap of [-width, 0, width]) {
+          const centerX = baseX + offsetX + wrap;
+          const centerY = baseY + offsetY;
+          context.save();
+          context.translate(centerX, centerY);
+          context.scale(1, squash);
+          const puffGradient = context.createRadialGradient(0, 0, 0, 0, 0, radius);
+          puffGradient.addColorStop(0, `rgba(255, 255, 255, ${alpha.toFixed(3)})`);
+          puffGradient.addColorStop(0.55, `rgba(250, 252, 255, ${(alpha * 0.55).toFixed(3)})`);
+          puffGradient.addColorStop(1, "rgba(245, 250, 255, 0)");
+          context.fillStyle = puffGradient;
+          context.fillRect(-radius, -radius, radius * 2, radius * 2);
+          context.restore();
+        }
       }
     }
-
-    context.putImageData(image, 0, 0);
-  });
-
-const createTerrainDetailTexture = (scene: Scene): DynamicTexture =>
-  createDynamicTexture(scene, "terrain-detail-map", 256, 256, (context, width, height) => {
-    context.fillStyle = "#808080";
-    context.fillRect(0, 0, width, height);
-
-    for (let i = 0; i < 1400; i += 1) {
-      const x = hash2(i, 1.3) * width;
-      const y = hash2(i, 3.7) * height;
-      const length = 8 + hash2(i, 7.1) * 20;
-      const alpha = 0.04 + hash2(i, 11.9) * 0.08;
-
-      context.strokeStyle = `rgba(255,255,255,${alpha.toFixed(3)})`;
-      context.beginPath();
-      context.moveTo(x, y);
-      context.lineTo(x + (hash2(i, 4.2) - 0.5) * 4, y + length);
-      context.stroke();
-    }
-
-    for (let i = 0; i < 1200; i += 1) {
-      const x = hash2(i, 15.4) * width;
-      const y = hash2(i, 19.2) * height;
-      const radius = 0.6 + hash2(i, 21.8) * 1.6;
-      context.fillStyle = `rgba(0,0,0,${(0.035 + hash2(i, 13.4) * 0.05).toFixed(3)})`;
-      context.beginPath();
-      context.arc(x, y, radius, 0, Math.PI * 2);
-      context.fill();
-    }
-  });
-
-const createRadialPatchTexture = (
-  scene: Scene,
-  name: string,
-  innerColor: string,
-  edgeColor: string,
-  fadeFrom = 0.7,
-): DynamicTexture =>
-  createDynamicTexture(scene, name, 512, 512, (context, width, height) => {
-    const gradient = context.createRadialGradient(
-      width / 2,
-      height / 2,
-      width * 0.08,
-      width / 2,
-      height / 2,
-      width * 0.48,
-    );
-    gradient.addColorStop(0, innerColor);
-    gradient.addColorStop(fadeFrom, innerColor);
-    gradient.addColorStop(1, edgeColor);
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, width, height);
-  });
-
-const createSkyTexture = (scene: Scene): DynamicTexture =>
-  createDynamicTexture(scene, "field-sky", 128, 1024, (context, width, height) => {
-    const gradient = context.createLinearGradient(0, 0, 0, height);
-    gradient.addColorStop(0, "#4b81d0");
-    gradient.addColorStop(0.38, "#92c2f1");
-    gradient.addColorStop(0.72, "#d9ecfb");
-    gradient.addColorStop(1, "#f6fbff");
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, width, height);
   });
 
 const createGrassCardTexture = (scene: Scene): DynamicTexture =>
   createDynamicTexture(scene, "grass-card", 128, 256, (context, width, height) => {
     context.clearRect(0, 0, width, height);
-    for (let i = 0; i < 22; i += 1) {
+    for (let i = 0; i < 26; i += 1) {
       const x = width * (0.1 + hash2(i, 2.4) * 0.8);
       const baseY = height - 4;
-      const topY = 28 + hash2(i, 5.1) * 44;
-      const bend = (hash2(i, 9.2) - 0.5) * 24;
-      context.strokeStyle = `rgba(${80 + Math.round(hash2(i, 1.7) * 34)}, ${130 + Math.round(hash2(i, 3.4) * 40)}, ${58 + Math.round(hash2(i, 4.6) * 20)}, 0.9)`;
-      context.lineWidth = 2 + hash2(i, 7.4) * 1.6;
+      const topY = 36 + hash2(i, 5.1) * 60;
+      const bend = (hash2(i, 9.2) - 0.5) * 30;
+      const r = 112 + Math.round(hash2(i, 1.7) * 34);
+      const g = 146 + Math.round(hash2(i, 3.4) * 30);
+      const b = 58 + Math.round(hash2(i, 4.6) * 22);
+      context.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.88)`;
+      context.lineWidth = 2 + hash2(i, 7.4) * 1.8;
+      context.lineCap = "round";
       context.beginPath();
       context.moveTo(x, baseY);
       context.quadraticCurveTo(x + bend * 0.4, (baseY + topY) * 0.58, x + bend, topY);
@@ -228,81 +346,97 @@ const createGrassCardTexture = (scene: Scene): DynamicTexture =>
     }
   });
 
-export const createFieldMaterials = (scene: Scene, field: FieldModel): FieldMaterials => {
+const createFlagTexture = (scene: Scene): DynamicTexture =>
+  createDynamicTexture(scene, "pin-flag", 256, 160, (context, width, height) => {
+    context.fillStyle = "#e23b26";
+    context.fillRect(0, 0, width, height);
+    // Faint cloth weave so the flag is not a flat fill up close.
+    context.strokeStyle = "rgba(255, 255, 255, 0.06)";
+    context.lineWidth = 1;
+    for (let y = 0; y < height; y += 4) {
+      context.beginPath();
+      context.moveTo(0, y);
+      context.lineTo(width, y);
+      context.stroke();
+    }
+    context.fillStyle = "#fffaf0";
+    context.font = "bold 110px Segoe UI, Arial, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText("1", width * 0.5, height * 0.55);
+  });
+
+export const createFieldMaterials = (
+  scene: Scene,
+  field: FieldModel,
+  sunUv: { u: number; v: number },
+): FieldMaterials => {
+  const lookups = createTerrainLookupTextures(scene, field);
+
   const terrain = new StandardMaterial("terrain-material", scene);
-  terrain.diffuseTexture = createTerrainColorTexture(scene, field);
-  terrain.bumpTexture = createTerrainDetailTexture(scene);
-  terrain.specularColor = Color3.Black();
-  (terrain.bumpTexture as Texture).uScale = 18;
-  (terrain.bumpTexture as Texture).vScale = 24;
-  terrain.bumpTexture.level = 0.12;
+  terrain.diffuseTexture = lookups.tint;
+  // A touch of broad specular gives the green its sheen without making the rough shiny.
+  terrain.specularColor = new Color3(0.05, 0.05, 0.04);
+  terrain.specularPower = 48;
+  const splat = new TerrainSplatPlugin(terrain);
+  splat.setLayers({
+    mask: lookups.mask,
+    roughColor: loadTiledTexture(scene, "grass_rough_color.jpg"),
+    roughNormal: loadTiledTexture(scene, "grass_rough_normal.jpg"),
+    fairwayColor: loadTiledTexture(scene, "grass_fairway_color.jpg"),
+    fairwayNormal: loadTiledTexture(scene, "grass_fairway_normal.jpg"),
+    greenColor: loadTiledTexture(scene, "grass_green_color.jpg"),
+    greenNormal: loadTiledTexture(scene, "grass_green_normal.jpg"),
+    sandColor: loadTiledTexture(scene, "sand_bunker_color.jpg"),
+    sandNormal: loadTiledTexture(scene, "sand_bunker_normal.jpg"),
+  });
 
-  const greenPatch = new StandardMaterial("green-patch-material", scene);
-  greenPatch.diffuseTexture = createRadialPatchTexture(
-    scene,
-    "green-patch",
-    "rgba(91, 133, 56, 0.92)",
-    "rgba(91, 133, 56, 0)",
-    0.68,
-  );
-  greenPatch.specularColor = Color3.Black();
-  greenPatch.alpha = 0.95;
-
-  const bunkerPatch = new StandardMaterial("bunker-patch-material", scene);
-  bunkerPatch.diffuseTexture = createRadialPatchTexture(
-    scene,
-    "bunker-patch",
-    "rgba(212, 194, 155, 0.96)",
-    "rgba(212, 194, 155, 0)",
-    0.62,
-  );
-  bunkerPatch.specularColor = new Color3(0.04, 0.04, 0.04);
-  bunkerPatch.alpha = 0.92;
-
-  const teePatch = new StandardMaterial("tee-patch-material", scene);
-  teePatch.diffuseTexture = createRadialPatchTexture(
-    scene,
-    "tee-patch",
-    "rgba(109, 146, 72, 0.9)",
-    "rgba(109, 146, 72, 0)",
-    0.76,
-  );
-  teePatch.specularColor = Color3.Black();
-  teePatch.alpha = 0.9;
+  const backdrop = new StandardMaterial("backdrop-material", scene);
+  const backdropTexture = loadTiledTexture(scene, "grass_rough_color.jpg");
+  backdropTexture.uScale = 90;
+  backdropTexture.vScale = 90;
+  backdrop.diffuseTexture = backdropTexture;
+  backdrop.diffuseColor = new Color3(0.72, 0.8, 0.7);
+  backdrop.specularColor = Color3.Black();
 
   const sky = new StandardMaterial("sky-material", scene);
-  sky.diffuseTexture = createSkyTexture(scene);
-  sky.emissiveColor = new Color3(0.67, 0.79, 0.96);
+  sky.emissiveTexture = createSkyTexture(scene, sunUv.u, sunUv.v);
+  sky.diffuseColor = Color3.Black();
   sky.specularColor = Color3.Black();
+  sky.disableLighting = true;
+  sky.fogEnabled = false;
 
   const flag = new StandardMaterial("flag-material", scene);
-  flag.diffuseColor = new Color3(0.94, 0.35, 0.22);
-  flag.emissiveColor = new Color3(0.12, 0.03, 0.02);
-  flag.specularColor = new Color3(0.18, 0.18, 0.18);
+  flag.diffuseTexture = createFlagTexture(scene);
+  flag.emissiveColor = new Color3(0.1, 0.03, 0.02);
+  flag.specularColor = new Color3(0.12, 0.12, 0.12);
+  flag.backFaceCulling = false;
 
   const pole = new StandardMaterial("flag-pole-material", scene);
-  pole.diffuseColor = new Color3(0.86, 0.87, 0.85);
-  pole.specularColor = new Color3(0.2, 0.2, 0.2);
+  pole.diffuseColor = new Color3(0.92, 0.92, 0.9);
+  pole.specularColor = new Color3(0.35, 0.35, 0.35);
+  pole.specularPower = 32;
 
-  const cup = new StandardMaterial("cup-material", scene);
-  cup.diffuseColor = new Color3(0.09, 0.12, 0.08);
-  cup.specularColor = Color3.Black();
+  const cupHole = new StandardMaterial("cup-hole-material", scene);
+  cupHole.diffuseColor = new Color3(0.04, 0.05, 0.035);
+  cupHole.specularColor = Color3.Black();
+
+  const cupRim = new StandardMaterial("cup-rim-material", scene);
+  cupRim.diffuseColor = new Color3(0.95, 0.95, 0.92);
+  cupRim.specularColor = new Color3(0.2, 0.2, 0.2);
+
+  const teeMarker = new StandardMaterial("tee-marker-material", scene);
+  teeMarker.diffuseColor = new Color3(0.98, 0.97, 0.93);
+  teeMarker.specularColor = new Color3(0.12, 0.12, 0.12);
 
   const treeTrunk = new StandardMaterial("tree-trunk-material", scene);
-  treeTrunk.diffuseColor = new Color3(0.35, 0.24, 0.15);
+  treeTrunk.diffuseColor = new Color3(0.33, 0.24, 0.16);
   treeTrunk.specularColor = Color3.Black();
 
-  const treeLeafNear = new StandardMaterial("tree-leaf-near-material", scene);
-  treeLeafNear.diffuseColor = new Color3(0.28, 0.43, 0.22);
-  treeLeafNear.specularColor = Color3.Black();
-
-  const treeLeafMid = new StandardMaterial("tree-leaf-mid-material", scene);
-  treeLeafMid.diffuseColor = new Color3(0.3, 0.4, 0.23);
-  treeLeafMid.specularColor = Color3.Black();
-
-  const treeLeafFar = new StandardMaterial("tree-leaf-far-material", scene);
-  treeLeafFar.diffuseColor = new Color3(0.34, 0.39, 0.29);
-  treeLeafFar.specularColor = Color3.Black();
+  // Canopy colour lives in the vertex colours of each tree variant.
+  const treeCanopy = new StandardMaterial("tree-canopy-material", scene);
+  treeCanopy.diffuseColor = new Color3(1, 1, 1);
+  treeCanopy.specularColor = Color3.Black();
 
   const grassCard = new StandardMaterial("grass-card-material", scene);
   grassCard.diffuseTexture = createGrassCardTexture(scene);
@@ -310,20 +444,19 @@ export const createFieldMaterials = (scene: Scene, field: FieldModel): FieldMate
   grassCard.useAlphaFromDiffuseTexture = true;
   grassCard.backFaceCulling = false;
   grassCard.specularColor = Color3.Black();
+  grassCard.emissiveColor = new Color3(0.2, 0.26, 0.11);
 
   return {
     terrain,
-    greenPatch,
-    bunkerPatch,
-    teePatch,
+    backdrop,
     sky,
     flag,
     pole,
-    cup,
+    cupHole,
+    cupRim,
+    teeMarker,
     treeTrunk,
-    treeLeafNear,
-    treeLeafMid,
-    treeLeafFar,
+    treeCanopy,
     grassCard,
   };
 };

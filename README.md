@@ -9,6 +9,8 @@ Babylon.js + TypeScript + Vite demo for visualizing launch-monitor-style golf sh
 ## Features
 
 - Browser-based 3D hole scene with rolling terrain, fairway corridor, green complex, bunkers, tree line, flag, tee markers, and distance markers
+- Splat-blended terrain material: tiled CC0 grass and sand textures (rough, fairway, green, bunker) with normal maps, mowing patterns on the green, raked bunker sand, and a large-scale tint map for stripes and colour variation
+- Filmic (ACES) tone mapping, PCF soft shadows from trees and the ball, procedural sky with clouds, and backdrop hills that hide the field edge
 - Structured JSON shot input with centralized unit normalization to SI units
 - Custom fixed-timestep ballistics with gravity, drag, Magnus-style lift and curve, spin decay, bounce, skid, and roll
 - Calibration profiles for `driver`, `long_iron`, `short_iron`, `wedge`, and `putt_like`
@@ -185,9 +187,10 @@ The current shot is highlighted in warm colors. Comparison overlays render in a 
 - `src/core/collision.ts`: bounce, skid, roll, and surface friction
 - `src/core/physicsConfig.ts`: centralized tunable constants
 - `src/render/ballRenderer.ts`: ball mesh, dimpled material, and shadow disc
-- `src/render/terrain.ts`: procedural hole terrain and surface lookup
-- `src/render/materials.ts`: terrain, sky, patch, and prop materials
-- `src/render/props.ts`: flag, markers, trees, grass, and background props
+- `src/render/terrain.ts`: procedural hole terrain (non-uniform grid, bunker bowls, green contour) and surface lookup
+- `src/render/materials.ts`: terrain splat mask and tint maps, sky, and prop materials
+- `src/render/terrainSplatPlugin.ts`: material plugin that blends the tiled surface textures and normals on the terrain
+- `src/render/props.ts`: pin, markers, trees, rough grass tufts, and backdrop hills
 - `src/render/scene.ts`: scene orchestration and camera control
 - `src/render/trajectoryRenderer.ts`: current and comparison trajectory overlays
 - `src/ui/debugPanel.ts`: DOM analysis panel and tuning controls
@@ -197,11 +200,13 @@ The current shot is highlighted in warm colors. Comparison overlays render in a 
 
 The rendering path stays browser-friendly by design:
 
-- terrain uses one procedural mesh instead of editable terrain tooling
-- the corridor is visually richer than the distant background
-- near-camera grass is instance-based and only generated around tee/green/playable areas
-- tree bands are instance-based and use simple low-cost meshes
-- terrain transitions are baked into generated textures instead of using a complex runtime terrain editor or multi-pass material stack
+- terrain uses one procedural mesh with a non-uniform grid: sub-metre triangles around the tee and green complex, coarse triangles in the outskirts
+- surface detail comes from four tiled 1K textures blended in a single StandardMaterial pass (see `src/render/terrainSplatPlugin.ts`), so shadows, fog, and tone mapping stay on Babylon's built-in path
+- rough grass tufts are thin instances placed only along the fairway edges and bunker lips
+- trees are three merged low-poly variants rendered as instances; only the ones near the hole cast shadows
+- the terrain height is visual only; the ball, trajectory, and markers are lifted to the drawn surface while the physics still runs on flat ground
+
+Texture assets live in `public/textures/` and are CC0 from ambientCG (see `public/textures/LICENSE.md`). `scripts/fetch-textures.py` re-downloads and re-encodes them.
 
 The current largest browser cost is still the Babylon bundle size. Vite build passes, but the final chunk is large and can be code-split later if needed.
 

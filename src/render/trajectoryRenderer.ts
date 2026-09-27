@@ -9,6 +9,7 @@ import {
 } from "@babylonjs/core";
 import type { Vec3 } from "../core/vector";
 import type { TrajectoryDisplayMode, TrajectorySegments } from "../types/simulation";
+import type { GroundHeightResolver } from "./ballRenderer";
 
 export interface RenderedTrajectory {
   points: Vec3[];
@@ -25,8 +26,15 @@ export interface TrajectoryRenderer {
   highlightFrame(point: Vec3): void;
 }
 
-const toBabylonPoints = (points: Vec3[], yOffset = 0): Vector3[] =>
-  points.map((point) => new Vector3(point.x, point.y + yOffset, point.z));
+const toBabylonPoints = (
+  points: Vec3[],
+  groundHeightAt: GroundHeightResolver,
+  yOffset = 0,
+): Vector3[] =>
+  points.map(
+    (point) =>
+      new Vector3(point.x, point.y + groundHeightAt(point.x, point.z) + yOffset, point.z),
+  );
 
 const createLandingStack = (
   scene: Scene,
@@ -112,7 +120,10 @@ const sliceTrajectory = (
   }
 };
 
-export const createTrajectoryRenderer = (scene: Scene): TrajectoryRenderer => {
+export const createTrajectoryRenderer = (
+  scene: Scene,
+  groundHeightAt: GroundHeightResolver,
+): TrajectoryRenderer => {
   let currentLine: LinesMesh | null = null;
   let currentShadow: LinesMesh | null = null;
   let comparisonLine: LinesMesh | null = null;
@@ -156,7 +167,7 @@ export const createTrajectoryRenderer = (scene: Scene): TrajectoryRenderer => {
         currentLine = MeshBuilder.CreateLines(
           "trajectory-line",
           {
-            points: toBabylonPoints(currentPoints, 0.04),
+            points: toBabylonPoints(currentPoints, groundHeightAt, 0.04),
           },
           scene,
         );
@@ -166,7 +177,11 @@ export const createTrajectoryRenderer = (scene: Scene): TrajectoryRenderer => {
         currentShadow = MeshBuilder.CreateLines(
           "trajectory-shadow-line",
           {
-            points: toBabylonPoints(currentPoints.map((point) => ({ ...point, y: 0.03 }))),
+            points: toBabylonPoints(
+              currentPoints.map((point) => ({ ...point, y: 0 })),
+              groundHeightAt,
+              0.03,
+            ),
           },
           scene,
         );
@@ -179,7 +194,7 @@ export const createTrajectoryRenderer = (scene: Scene): TrajectoryRenderer => {
         comparisonLine = MeshBuilder.CreateLines(
           "comparison-trajectory-line",
           {
-            points: toBabylonPoints(comparison.points, 0.06),
+            points: toBabylonPoints(comparison.points, groundHeightAt, 0.06),
           },
           scene,
         );
@@ -196,9 +211,10 @@ export const createTrajectoryRenderer = (scene: Scene): TrajectoryRenderer => {
         landing.pulse.isVisible = visible && point !== null;
         landing.beacon.isVisible = visible && point !== null;
         if (point) {
-          landing.marker.position.copyFromFloats(point.x, 0.05, point.z);
-          landing.pulse.position.copyFromFloats(point.x, 0.03, point.z);
-          landing.beacon.position.copyFromFloats(point.x, 1.75, point.z);
+          const groundY = groundHeightAt(point.x, point.z);
+          landing.marker.position.copyFromFloats(point.x, groundY + 0.05, point.z);
+          landing.pulse.position.copyFromFloats(point.x, groundY + 0.03, point.z);
+          landing.beacon.position.copyFromFloats(point.x, groundY + 1.75, point.z);
         }
       };
 
@@ -207,7 +223,11 @@ export const createTrajectoryRenderer = (scene: Scene): TrajectoryRenderer => {
     },
     highlightFrame(point) {
       liveMarker.isVisible = true;
-      liveMarker.position.copyFromFloats(point.x, point.y, point.z);
+      liveMarker.position.copyFromFloats(
+        point.x,
+        point.y + groundHeightAt(point.x, point.z),
+        point.z,
+      );
     },
   };
 };
