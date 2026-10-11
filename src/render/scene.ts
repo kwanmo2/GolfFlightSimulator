@@ -21,8 +21,10 @@ import {
 } from "./renderConfig";
 import { createShadowSystem } from "./shadows";
 import { createSky } from "./sky";
+import { createPondWater } from "./water";
 import { createFieldModel, createTerrainMesh } from "./terrain";
 import { populateVegetation } from "./vegetation";
+import type { VegetationController } from "./vegetation";
 import type {
   GraphicsQuality,
   ReplayCameraMode,
@@ -223,14 +225,22 @@ export const createSceneController = (canvas: HTMLCanvasElement): SceneControlle
   const shadows = createShadowSystem(sun, DEFAULT_GRAPHICS_QUALITY);
 
   createCourseDetails(scene, field);
+  const water = createPondWater(scene, field, DEFAULT_GRAPHICS_QUALITY);
   const outsideFieldHeightAt = populateFieldProps(scene, field, materials);
-  // The scene renders straight away; vegetation appears once its models load,
-  // and a failed load leaves a playable, if bare, course.
-  populateVegetation(scene, field, materials.vegetation, shadows, outsideFieldHeightAt).catch(
-    (error: unknown) => {
-      console.warn("Vegetation models failed to load; continuing without them.", error);
-    },
-  );
+  const backdrop = scene.getMeshByName("backdrop-hills");
+  water.addReflectedMeshes(backdrop ? [terrain, backdrop] : [terrain]);
+  // The scene renders straight away; vegetation appears once its textures
+  // load, and a failed load leaves a playable, if bare, course.
+  let vegetation: VegetationController | null = null;
+  let graphicsQuality: GraphicsQuality = DEFAULT_GRAPHICS_QUALITY;
+  populateVegetation(scene, field, shadows, outsideFieldHeightAt, water, DEFAULT_GRAPHICS_QUALITY)
+    .then((controller) => {
+      vegetation = controller;
+      controller.setQuality(graphicsQuality);
+    })
+    .catch((error: unknown) => {
+      console.warn("Vegetation failed to load; continuing without it.", error);
+    });
 
   const rigs: Record<ReplayCameraMode, OrbitRig> = {
     chase: createOrbitRig(
@@ -362,6 +372,9 @@ export const createSceneController = (canvas: HTMLCanvasElement): SceneControlle
       postProcessing.setQuality(quality);
       shadows.setQuality(quality);
       materials.terrainPlugin.setAntiTiling(QUALITY_PRESETS[quality].terrainAntiTiling);
+      water.setQuality(quality);
+      vegetation?.setQuality(quality);
+      graphicsQuality = quality;
     },
     resize() {
       engine.resize();

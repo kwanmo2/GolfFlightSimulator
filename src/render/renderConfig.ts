@@ -106,6 +106,35 @@ export const TERRAIN_SHADING: TerrainShadingParams = {
   rakeFadeEndM: 45,
 };
 
+/** Pond surface (see water.ts). Colours are linear. */
+export const WATER = {
+  /** Silty green-brown where the bed shows through. */
+  shallow: new Color3(0.09, 0.11, 0.06),
+  shallowAlpha: 0.55,
+  /** Dark blue-green body of deeper water. */
+  deep: new Color3(0.012, 0.03, 0.035),
+  deepAlpha: 0.96,
+  /** Depth at which the water reads fully deep, metres. */
+  deepAtM: 0.8,
+  roughness: 0.04,
+  indexOfRefraction: 1.333,
+  rippleStrength: 0.08,
+  rippleFadeStartM: 40,
+  rippleFadeEndM: 220,
+  /** Foam covers depths below foamStartM, fading out by foamEndM. */
+  foamStartM: 0.09,
+  foamEndM: 0.15,
+  foamStrength: 0.4,
+  /** Strength of the planar reflection on the "high" preset. */
+  mirrorLevel: 0.9,
+} as const;
+
+/** Breeze shared by every swaying plant (see windPlugin.ts); a unit XZ direction. */
+export const WIND = {
+  directionX: 0.8,
+  directionZ: 0.6,
+} as const;
+
 export interface QualityPreset {
   /** Cascaded shadows: sharp near the camera, still covering the whole hole. */
   cascadedShadows: boolean;
@@ -115,6 +144,10 @@ export interface QualityPreset {
   ssao: boolean;
   /** Cross-fade that hides terrain texture repetition, at twice the texture fetches. */
   terrainAntiTiling: boolean;
+  /** Planar reflection of trees and banks in the pond; otherwise it mirrors only the sky. */
+  waterReflection: boolean;
+  /** Share of the rough's grass clumps drawn. */
+  grassDensity: number;
 }
 
 /**
@@ -128,6 +161,8 @@ export const QUALITY_PRESETS: Record<GraphicsQuality, QualityPreset> = {
     shadowCascades: 1,
     ssao: false,
     terrainAntiTiling: false,
+    waterReflection: false,
+    grassDensity: 0.55,
   },
   high: {
     cascadedShadows: true,
@@ -135,6 +170,8 @@ export const QUALITY_PRESETS: Record<GraphicsQuality, QualityPreset> = {
     shadowCascades: 3,
     ssao: true,
     terrainAntiTiling: true,
+    waterReflection: true,
+    grassDensity: 1,
   },
 };
 

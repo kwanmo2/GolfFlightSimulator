@@ -37,3 +37,19 @@ export const valueNoise = (x: number, z: number): number => {
   const bottom = hash2(x0, z0 + 1) + (hash2(x0 + 1, z0 + 1) - hash2(x0, z0 + 1)) * sx;
   return top + (bottom - top) * sz;
 };
+
+/**
+ * Seeded sequence of pseudo-random values in [0, 1) (mulberry32). Use it where
+ * many draws are needed in order, such as growing a tree, so each seed always
+ * gives the same result.
+ */
+export const mulberry32 = (seed: number): (() => number) => {
+  let state = Math.floor(seed * 0x9e3779b9) >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};

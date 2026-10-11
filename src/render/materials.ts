@@ -24,8 +24,6 @@ export interface FieldMaterials {
   cupHole: PBRMaterial;
   cupRim: PBRMaterial;
   teeMarker: PBRMaterial;
-  /** Shared by every tree, bush and grass clump; their colour lives in vertex colours. */
-  vegetation: PBRMaterial;
 }
 
 interface RgbColor {
@@ -74,10 +72,9 @@ const POND_BED_SHADE = 0.55;
 const SAND_WALL_SHADE = 0.14;
 
 // Roughness for the PBR surfaces: grass and sand scatter almost all light,
-// painted props have a soft satin sheen, leaves sit in between.
+// painted props have a soft satin sheen.
 const TERRAIN_ROUGHNESS = 0.92;
 const PAINT_ROUGHNESS = 0.55;
-const FOLIAGE_ROUGHNESS = 0.8;
 const FLAG_ROUGHNESS = 0.85;
 
 /**
@@ -308,11 +305,6 @@ export const createFieldMaterials = (scene: Scene, field: FieldModel): FieldMate
   flag.backFaceCulling = false;
   flag.twoSidedLighting = true;
 
-  // Leaves and grass blades are single-sided cards in the kit, so they are
-  // drawn and lit from both sides.
-  const vegetation = createPaintedMaterial(scene, "vegetation-material", "#ffffff", FOLIAGE_ROUGHNESS);
-  vegetation.backFaceCulling = false;
-  vegetation.twoSidedLighting = true;
 
   return {
     terrain,
@@ -323,6 +315,5 @@ export const createFieldMaterials = (scene: Scene, field: FieldModel): FieldMate
     cupHole: createPaintedMaterial(scene, "cup-hole-material", PALETTE.props.cupHole, TERRAIN_ROUGHNESS),
     cupRim: createPaintedMaterial(scene, "cup-rim-material", PALETTE.props.cupRim),
     teeMarker: createPaintedMaterial(scene, "tee-marker-material", PALETTE.props.teeMarker),
-    vegetation,
   };
 };

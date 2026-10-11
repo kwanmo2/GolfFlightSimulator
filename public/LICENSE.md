@@ -11,4 +11,8 @@ processed results are committed.
 | `textures/terrain/fairway_*.jpg` | [Grass005](https://ambientcg.com/view?id=Grass005), ambientCG, 1K | CC0 1.0 | As above |
 | `textures/terrain/green_*.jpg` | [Grass008](https://ambientcg.com/view?id=Grass008), ambientCG, 1K | CC0 1.0 | As above |
 | `textures/terrain/sand_*.jpg` | [Ground101](https://ambientcg.com/view?id=Ground101), ambientCG, 1K | CC0 1.0 | As above |
-| `models/*.glb` | Kenney Nature Kit; see `models/LICENSE.md` | CC0 1.0 | Unmodified |
+| `textures/vegetation/beech.webp`, `oak.webp`, `linden.webp` | [LeafSet014](https://ambientcg.com/view?id=LeafSet014), [LeafSet016](https://ambientcg.com/view?id=LeafSet016), [LeafSet024](https://ambientcg.com/view?id=LeafSet024), ambientCG, 1K | CC0 1.0 | Colour + opacity merged to RGBA WebP; leaf bounding boxes in `atlases.json` |
+| `textures/vegetation/fir.webp` | [LeafSet019](https://ambientcg.com/view?id=LeafSet019), ambientCG, 1K | CC0 1.0 | As above |
+| `textures/vegetation/grass.webp`, `weeds.webp` | [Foliage001](https://ambientcg.com/view?id=Foliage001), [Foliage007](https://ambientcg.com/view?id=Foliage007), ambientCG, 1K | CC0 1.0 | As above |
+| `textures/vegetation/bark_broadleaf_*.jpg` | [Bark012](https://ambientcg.com/view?id=Bark012), ambientCG, 1K | CC0 1.0 | Colour and NormalGL kept |
+| `textures/vegetation/bark_conifer_*.jpg` | [Bark014](https://ambientcg.com/view?id=Bark014), ambientCG, 1K | CC0 1.0 | Colour and NormalGL kept |

@@ -3,12 +3,14 @@
 Processed files live in public/ and are committed, so running this is only
 needed to refresh or replace them. Every asset is recorded in public/LICENSE.md.
 
-Usage: python scripts/fetch-assets.py
+Usage: python scripts/fetch-assets.py [vegetation]
+  With "vegetation", only the foliage and bark textures are refreshed.
 Requires: python 3, ffmpeg and ffprobe on PATH (decode the HDRI).
 """
 from __future__ import annotations
 
 import io
+import json
 import math
 import struct
 import subprocess
@@ -53,6 +55,30 @@ TERRAIN_OUT = PUBLIC / "textures" / "terrain"
 # Mean of a normalised detail map, as a byte. The shader multiplies by 2.
 DETAIL_MEAN = 0.5
 JPEG_QUALITY = "3"
+
+# ambientCG cut-out atlases for foliage. Each becomes an RGBA WebP (colour +
+# opacity) plus the bounding boxes of its separate leaves, sprays or blades,
+# which the renderer composes into leaf-cluster and grass-clump cards.
+FOLIAGE_ATLASES = {
+    "beech": "LeafSet014",
+    "oak": "LeafSet016",
+    "linden": "LeafSet024",
+    "fir": "LeafSet019",
+    "grass": "Foliage001",
+    "weeds": "Foliage007",
+}
+BARK_TEXTURES = {
+    "broadleaf": "Bark012",
+    "conifer": "Bark014",
+}
+VEGETATION_OUT = PUBLIC / "textures" / "vegetation"
+ATLAS_SIZE = 1024
+WEBP_QUALITY = "88"
+# Sprites are found on a coarse copy of the opacity map: one cell per 8 px.
+SPRITE_GRID = 128
+SPRITE_OPACITY_THRESHOLD = 40
+SPRITE_MIN_CELLS = 6
+SPRITE_PADDING_PX = 6
 
 
 
@@ -131,6 +157,97 @@ def fetch_terrain_textures() -> None:
         encode_jpeg(detail, size, TERRAIN_OUT / f"{layer}_detail.jpg")
         normal = decode_rgb(archive.read(maps["NormalGL.jpg"]), size)
         encode_jpeg(normal, size, TERRAIN_OUT / f"{layer}_normal.jpg")
+
+
+def decode_gray(image: bytes, size: int) -> bytes:
+    return subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-i", "pipe:0",
+            "-vf", f"scale={size}:{size}:flags=area",
+            "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1",
+        ],
+        input=image,
+        check=True,
+        capture_output=True,
+    ).stdout
+
+
+def find_sprites(opacity: bytes) -> list[list[int]]:
+    """Bounding boxes (x, y, w, h in atlas pixels) of the opaque islands."""
+    grid = SPRITE_GRID
+    coarse = decode_gray(opacity, grid)
+    solid = [value > SPRITE_OPACITY_THRESHOLD for value in coarse]
+    seen = [False] * (grid * grid)
+    scale = ATLAS_SIZE // grid
+    sprites = []
+    for start in range(grid * grid):
+        if not solid[start] or seen[start]:
+            continue
+        stack = [start]
+        seen[start] = True
+        cells = 0
+        min_x = min_y = grid
+        max_x = max_y = 0
+        while stack:
+            cell = stack.pop()
+            cells += 1
+            x, y = cell % grid, cell // grid
+            min_x, max_x, min_y, max_y = min(min_x, x), max(max_x, x), min(min_y, y), max(max_y, y)
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if 0 <= nx < grid and 0 <= ny < grid:
+                    neighbour = ny * grid + nx
+                    if solid[neighbour] and not seen[neighbour]:
+                        seen[neighbour] = True
+                        stack.append(neighbour)
+        if cells < SPRITE_MIN_CELLS:
+            continue
+        left = max(0, min_x * scale - SPRITE_PADDING_PX)
+        top = max(0, min_y * scale - SPRITE_PADDING_PX)
+        right = min(ATLAS_SIZE, (max_x + 1) * scale + SPRITE_PADDING_PX)
+        bottom = min(ATLAS_SIZE, (max_y + 1) * scale + SPRITE_PADDING_PX)
+        sprites.append([left, top, right - left, bottom - top])
+    return sprites
+
+
+def encode_rgba_webp(color: bytes, opacity: bytes, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as scratch:
+        color_path = Path(scratch) / "color.jpg"
+        opacity_path = Path(scratch) / "opacity.jpg"
+        color_path.write_bytes(color)
+        opacity_path.write_bytes(opacity)
+        subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-y", "-i", str(color_path), "-i", str(opacity_path),
+                "-filter_complex",
+                f"[0]scale={ATLAS_SIZE}:{ATLAS_SIZE},format=rgba[c];"
+                f"[1]scale={ATLAS_SIZE}:{ATLAS_SIZE},format=gray[a];[c][a]alphamerge",
+                "-c:v", "libwebp", "-quality", WEBP_QUALITY, "-frames:v", "1", str(destination),
+            ],
+            check=True,
+        )
+
+
+def resize_jpeg(image: bytes, size: int, destination: Path) -> None:
+    encode_jpeg(decode_rgb(image, size), size, destination)
+
+
+def fetch_vegetation_textures() -> None:
+    manifest = {}
+    for name, asset_id in FOLIAGE_ATLASES.items():
+        archive = zipfile.ZipFile(io.BytesIO(download_bytes(f"https://ambientcg.com/get?file={asset_id}_1K-JPG.zip")))
+        maps = {entry.rsplit("_", 1)[-1]: entry for entry in archive.namelist()}
+        color, opacity = archive.read(maps["Color.jpg"]), archive.read(maps["Opacity.jpg"])
+        encode_rgba_webp(color, opacity, VEGETATION_OUT / f"{name}.webp")
+        manifest[name] = {"size": ATLAS_SIZE, "sprites": find_sprites(opacity)}
+        print(f"{name}: {asset_id}, {len(manifest[name]['sprites'])} sprites")
+    (VEGETATION_OUT / "atlases.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    for name, asset_id in BARK_TEXTURES.items():
+        archive = zipfile.ZipFile(io.BytesIO(download_bytes(f"https://ambientcg.com/get?file={asset_id}_1K-JPG.zip")))
+        maps = {entry.rsplit("_", 1)[-1]: entry for entry in archive.namelist()}
+        resize_jpeg(archive.read(maps["Color.jpg"]), ATLAS_SIZE, VEGETATION_OUT / f"bark_{name}_color.jpg")
+        resize_jpeg(archive.read(maps["NormalGL.jpg"]), ATLAS_SIZE, VEGETATION_OUT / f"bark_{name}_normal.jpg")
+        print(f"bark {name}: {asset_id}")
 
 
 def fetch_hdri(destination: Path) -> None:
@@ -269,6 +386,11 @@ def write_panorama(panorama: Panorama, destination: Path) -> None:
 
 
 def main() -> int:
+    only = set(sys.argv[1:])
+    if not only or "vegetation" in only:
+        fetch_vegetation_textures()
+    if only:
+        return 0
     fetch_terrain_textures()
     with tempfile.TemporaryDirectory() as scratch:
         source = Path(scratch) / "source.hdr"
