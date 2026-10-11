@@ -126,6 +126,18 @@ export const defaultPhysicsConfig = (): PhysicsConfig => ({
         maxBounces: 2,
         groundSpinRetention: 0.62,
       },
+      // A hazard, not a playing surface: the ball never bounces and is
+      // stopped within a few steps, settling on the pond bed.
+      water: {
+        restitution: 0,
+        skidDamping: 0.05,
+        skidFrictionAccel: 80,
+        skidToRollSpeedMps: 0,
+        rollFrictionAccel: 80,
+        bounceThresholdMps: 1000,
+        maxBounces: 0,
+        groundSpinRetention: 0,
+      },
     },
   },
   simulation: {

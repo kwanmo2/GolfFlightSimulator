@@ -16,7 +16,8 @@ import {
   getSurfaceResponse,
   resolveCalibrationProfile,
 } from "./calibration";
-import { advanceGroundPhase, resolveGroundContact } from "./collision";
+import { advanceGroundPhase, createGroundModel, resolveGroundContact } from "./collision";
+import type { GroundHeightResolver } from "./collision";
 import type { NormalizedShotData } from "../types/shot";
 import type {
   InitialConditions,
@@ -35,6 +36,8 @@ export interface SimulationContext {
   config: PhysicsConfig;
   shot: NormalizedShotData;
   surfaceResolver?: (x: number, z: number) => SurfaceType;
+  /** Ground height lookup; the ground is the flat y = 0 plane when omitted. */
+  groundHeightResolver?: GroundHeightResolver;
 }
 
 const captureFrame = (state: SimulationState): SimulationFrame => ({
@@ -119,12 +122,17 @@ const buildInitialMetrics = (
   recommendedProfileId,
 });
 
+/**
+ * Apex is measured from the ground the ball was struck from, so a raised tee
+ * box does not inflate it.
+ */
 const updateMetrics = (
   metrics: ShotAnalysisMetrics,
   state: SimulationState,
+  launchGroundY: number,
 ): ShotAnalysisMetrics => {
   metrics.totalDistanceM = horizontalLength(state.position);
-  metrics.apexHeightM = Math.max(metrics.apexHeightM, state.position.y);
+  metrics.apexHeightM = Math.max(metrics.apexHeightM, state.position.y - launchGroundY);
   metrics.lateralDeviationM = state.position.x;
 
   return metrics;
@@ -250,6 +258,7 @@ export const simulateBallFlight = (
   context: SimulationContext,
 ): SimulationResult => {
   const { config, shot, surfaceResolver } = context;
+  const ground = createGroundModel(context.groundHeightResolver);
   const { profile, profileId, recommendedProfileId } = resolveCalibrationProfile(shot);
   const environment = buildEnvironmentState(shot, config);
   const dt = config.simulation.fixedTimestep;
@@ -261,8 +270,11 @@ export const simulateBallFlight = (
     rollStartIndex: null,
   };
 
+  // Initial conditions are relative to level ground; lift them onto the tee.
+  const launchGroundY = ground.heightAt(initialConditions.position.x, initialConditions.position.z);
   let state: SimulationState = {
     ...initialConditions,
+    position: add(initialConditions.position, vec3(0, launchGroundY, 0)),
     time: 0,
     phase: "flight",
     bounceCount: 0,
@@ -271,7 +283,7 @@ export const simulateBallFlight = (
   let hasLanded = false;
 
   frames.push(captureFrame(state));
-  updateMetrics(metrics, state);
+  updateMetrics(metrics, state, launchGroundY);
 
   for (let step = 0; step < maxSteps; step += 1) {
     if (state.phase === "flight") {
@@ -291,8 +303,9 @@ export const simulateBallFlight = (
       const groundSurface = resolveSurfaceType(shot, state.position.x, state.position.z, surfaceResolver);
       state.surface = groundSurface;
 
-      if (state.position.y <= config.ball.radiusM) {
-        const landingPosition = vec3(state.position.x, config.ball.radiusM, state.position.z);
+      const groundY = ground.heightAt(state.position.x, state.position.z);
+      if (state.position.y <= groundY + config.ball.radiusM) {
+        const landingPosition = vec3(state.position.x, groundY + config.ball.radiusM, state.position.z);
         const impactVelocity = cloneVec3(state.velocity);
         const surfaceResponse = getSurfaceResponse(
           config,
@@ -300,7 +313,7 @@ export const simulateBallFlight = (
           profile,
           environment.groundCondition,
         );
-        const result = resolveGroundContact(state, config, surfaceResponse, hasLanded);
+        const result = resolveGroundContact(state, config, surfaceResponse, hasLanded, ground);
         state = {
           ...result.state,
           time: state.time,
@@ -330,6 +343,7 @@ export const simulateBallFlight = (
           config,
           surfaceResponse,
           dt,
+          ground,
         ),
         time: state.time + dt,
         surface: groundSurface,
@@ -346,7 +360,7 @@ export const simulateBallFlight = (
     }
 
     frames.push(captureFrame(state));
-    updateMetrics(metrics, state);
+    updateMetrics(metrics, state, launchGroundY);
 
     if (state.phase === "rest") {
       break;

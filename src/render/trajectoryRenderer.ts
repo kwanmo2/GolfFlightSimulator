@@ -10,6 +10,7 @@ import {
 import type { Vec3 } from "../core/vector";
 import type { TrajectoryDisplayMode, TrajectorySegments } from "../types/simulation";
 import type { GroundHeightResolver } from "./ballRenderer";
+import { PALETTE, toColor3 } from "./palette";
 
 export interface RenderedTrajectory {
   points: Vec3[];
@@ -26,15 +27,17 @@ export interface TrajectoryRenderer {
   highlightFrame(point: Vec3): void;
 }
 
-const toBabylonPoints = (
+/** Simulated points are already in world space; only a small lift against z-fighting is added. */
+const toBabylonPoints = (points: Vec3[], yOffset = 0): Vector3[] =>
+  points.map((point) => new Vector3(point.x, point.y + yOffset, point.z));
+
+/** The flight path projected straight down onto the terrain. */
+const toGroundPoints = (
   points: Vec3[],
   groundHeightAt: GroundHeightResolver,
-  yOffset = 0,
+  yOffset: number,
 ): Vector3[] =>
-  points.map(
-    (point) =>
-      new Vector3(point.x, point.y + groundHeightAt(point.x, point.z) + yOffset, point.z),
-  );
+  points.map((point) => new Vector3(point.x, groundHeightAt(point.x, point.z) + yOffset, point.z));
 
 const createLandingStack = (
   scene: Scene,
@@ -128,8 +131,12 @@ export const createTrajectoryRenderer = (
   let currentShadow: LinesMesh | null = null;
   let comparisonLine: LinesMesh | null = null;
 
-  const currentLanding = createLandingStack(scene, "current", new Color3(1, 0.68, 0.3));
-  const comparisonLanding = createLandingStack(scene, "comparison", new Color3(0.49, 0.76, 1));
+  const currentLanding = createLandingStack(scene, "current", toColor3(PALETTE.trajectory.landing));
+  const comparisonLanding = createLandingStack(
+    scene,
+    "comparison",
+    toColor3(PALETTE.trajectory.comparisonLanding),
+  );
 
   const liveMarker = MeshBuilder.CreateSphere(
     "trajectory-live-marker",
@@ -140,8 +147,8 @@ export const createTrajectoryRenderer = (
     scene,
   );
   const liveMaterial = new StandardMaterial("live-marker-material", scene);
-  liveMaterial.emissiveColor = new Color3(1, 0.96, 0.86);
-  liveMaterial.diffuseColor = new Color3(1, 1, 1);
+  liveMaterial.emissiveColor = toColor3(PALETTE.trajectory.liveMarker);
+  liveMaterial.diffuseColor = Color3.White();
   liveMarker.material = liveMaterial;
   liveMarker.isVisible = false;
 
@@ -167,25 +174,21 @@ export const createTrajectoryRenderer = (
         currentLine = MeshBuilder.CreateLines(
           "trajectory-line",
           {
-            points: toBabylonPoints(currentPoints, groundHeightAt, 0.04),
+            points: toBabylonPoints(currentPoints, 0.04),
           },
           scene,
         );
-        currentLine.color = new Color3(0.98, 0.9, 0.45);
+        currentLine.color = toColor3(PALETTE.trajectory.current);
         currentLine.alpha = 0.95;
 
         currentShadow = MeshBuilder.CreateLines(
           "trajectory-shadow-line",
           {
-            points: toBabylonPoints(
-              currentPoints.map((point) => ({ ...point, y: 0 })),
-              groundHeightAt,
-              0.03,
-            ),
+            points: toGroundPoints(currentPoints, groundHeightAt, 0.03),
           },
           scene,
         );
-        currentShadow.color = new Color3(0.2, 0.33, 0.17);
+        currentShadow.color = toColor3(PALETTE.trajectory.currentShadow);
         currentShadow.alpha = 0.5;
       }
 
@@ -194,11 +197,11 @@ export const createTrajectoryRenderer = (
         comparisonLine = MeshBuilder.CreateLines(
           "comparison-trajectory-line",
           {
-            points: toBabylonPoints(comparison.points, groundHeightAt, 0.06),
+            points: toBabylonPoints(comparison.points, 0.06),
           },
           scene,
         );
-        comparisonLine.color = new Color3(0.46, 0.8, 1);
+        comparisonLine.color = toColor3(PALETTE.trajectory.comparison);
         comparisonLine.alpha = 0.78;
       }
 
@@ -223,11 +226,7 @@ export const createTrajectoryRenderer = (
     },
     highlightFrame(point) {
       liveMarker.isVisible = true;
-      liveMarker.position.copyFromFloats(
-        point.x,
-        point.y + groundHeightAt(point.x, point.z),
-        point.z,
-      );
+      liveMarker.position.copyFromFloats(point.x, point.y, point.z);
     },
   };
 };

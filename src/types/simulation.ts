@@ -3,13 +3,15 @@ import type { Vec3 } from "../core/vector";
 
 export type MotionPhase = "flight" | "skid" | "roll" | "rest";
 export type ReplayCameraMode = "broadcast" | "chase" | "dispersion";
+/** Render quality: "high" adds screen-space ambient occlusion on top of "standard". */
+export type GraphicsQuality = "high" | "standard";
 export type TrajectoryDisplayMode =
   | "full"
   | "carry_only"
   | "roll_only"
   | "comparison";
 export type ComparisonTarget = "none" | "previous" | "baseline";
-export type SurfaceType = "tee" | "fairway" | "rough" | "green" | "bunker" | "fringe";
+export type SurfaceType = "tee" | "fairway" | "rough" | "green" | "bunker" | "fringe" | "water";
 export type GroundCondition = "normal" | "dry" | "wet";
 export type CalibrationProfileId =
   | "driver"

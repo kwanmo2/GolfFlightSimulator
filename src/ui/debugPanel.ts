@@ -4,6 +4,7 @@ import type { Vec3 } from "../core/vector";
 import type { ShotInput } from "../types/shot";
 import type {
   ComparisonTarget,
+  GraphicsQuality,
   GroundCondition,
   ProfileSelection,
   ReplayCameraMode,
@@ -29,6 +30,7 @@ interface DebugPanelOptions {
   onReset: () => void;
   onPauseToggle: () => void;
   onCameraChange: (camera: ReplayCameraMode) => void;
+  onGraphicsQualityChange: (quality: GraphicsQuality) => void;
   onTrajectoryModeChange: (mode: TrajectoryDisplayMode) => void;
   onComparisonTargetChange: (target: ComparisonTarget) => void;
   onProfileChange: (profile: ProfileSelection) => void;
@@ -152,6 +154,7 @@ export const createDebugPanel = ({
   onReset,
   onPauseToggle,
   onCameraChange,
+  onGraphicsQualityChange,
   onTrajectoryModeChange,
   onComparisonTargetChange,
   onProfileChange,
@@ -263,6 +266,16 @@ export const createDebugPanel = ({
       ],
       "broadcast",
       onCameraChange,
+    ),
+    createSelectControl<GraphicsQuality>(
+      documentRef,
+      "Graphics",
+      [
+        { label: "High (AO)", value: "high" },
+        { label: "Standard", value: "standard" },
+      ],
+      "high",
+      onGraphicsQualityChange,
     ),
     createSelectControl<TrajectoryDisplayMode>(
       documentRef,

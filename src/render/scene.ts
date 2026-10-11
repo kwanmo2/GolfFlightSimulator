@@ -1,23 +1,24 @@
 import {
   AbstractMesh,
   ArcRotateCamera,
-  Color3,
   Color4,
   DirectionalLight,
   Engine,
   HemisphericLight,
-  ImageProcessingConfiguration,
-  Mesh,
-  MeshBuilder,
   Scene,
   ShadowGenerator,
   Vector3,
-  VertexBuffer,
 } from "@babylonjs/core";
 import { createFieldMaterials } from "./materials";
+import { PALETTE, toColor3 } from "./palette";
+import { createPostProcessing } from "./postProcess";
+import { createCourseDetails } from "./courseDetails";
 import { populateFieldProps } from "./props";
+import { createSky } from "./sky";
 import { createFieldModel, createTerrainMesh } from "./terrain";
+import { populateVegetation } from "./vegetation";
 import type {
+  GraphicsQuality,
   ReplayCameraMode,
   ShotAnalysisMetrics,
   SimulationFrame,
@@ -32,10 +33,11 @@ export interface SceneController {
   updateReplayCamera(frame: SimulationFrame, metrics: ShotAnalysisMetrics): void;
   getSurfaceTypeAt(x: number, z: number): SurfaceType;
   /**
-   * Visual terrain height. The physics ground is the y = 0 plane, so renderers
-   * add this to simulated positions to keep the ball on the drawn surface.
+   * Terrain height in world Y. The simulation lands and rolls the ball on this
+   * same surface, so simulated positions need no further offset.
    */
   getGroundHeightAt(x: number, z: number): number;
+  setGraphicsQuality(quality: GraphicsQuality): void;
   resize(): void;
 }
 
@@ -68,29 +70,31 @@ interface OrbitRig {
 }
 
 const TWO_PI = Math.PI * 2;
+const CAMERA_NEAR_FRACTION = 0.1;
+const CAMERA_MAX_NEAR_M = 4;
+/** Far enough for the sky dome from anywhere on the course. */
+const CAMERA_FAR_M = 3000;
 const WHEEL_DELTA_PERCENTAGE = 0.02;
 
 // Late-morning sun from the golfer's front-right; the sky texture paints its
 // glow at the matching spot on the dome.
-const SUN_LIGHT_DIRECTION = new Vector3(-0.48, -1, 0.14);
-const SUN_COLOR = new Color3(1, 0.95, 0.86);
-const SUN_INTENSITY = 1.5;
-const SKY_LIGHT_COLOR = new Color3(0.78, 0.86, 1);
+// About 40 degrees up: low enough that mounds, banks and the green plateau
+// pick up readable light and shade, high enough to keep shadows compact.
+const SUN_LIGHT_DIRECTION = new Vector3(-0.62, -0.62, 0.3);
+const SUN_INTENSITY = 1.45;
+/** Distance back along the sunlight to place the light for shadow depth. */
+const SUN_SHADOW_DISTANCE_M = 180;
+// A strong, warm sky fill keeps shaded sides soft and colourful instead of
+// muddy, which is most of what makes the flat palette read as "soft".
 const SKY_LIGHT_INTENSITY = 0.6;
-const GROUND_BOUNCE_COLOR = new Color3(0.31, 0.35, 0.24);
-const FOG_COLOR = new Color3(0.84, 0.9, 0.96);
-const FOG_DENSITY = 0.0012;
-
-// Big enough to enclose the backdrop hills; fog hides the far side anyway.
-const SKY_DOME_DIAMETER_M = 2400;
+const FOG_DENSITY = 0.0011;
 
 const SHADOW_MAP_SIZE = 2048;
 const SHADOW_BIAS = 0.0008;
 const SHADOW_NORMAL_BIAS = 0.02;
+/** Fraction of light left inside shadows (0 = black). */
+const SHADOW_DARKNESS = 0.45;
 
-const TONEMAP_EXPOSURE = 1.7;
-const TONEMAP_CONTRAST = 1.05;
-const VIGNETTE_WEIGHT = 1.4;
 const CHASE_INITIAL_ALPHA = -Math.PI / 2;
 const CHASE_ALPHA_SMOOTHING = 0.08;
 
@@ -129,53 +133,6 @@ const lerpTowards = (current: Vector3, goal: Vector3, alpha: number): void => {
   current.z += (goal.z - current.z) * alpha;
 };
 
-/**
- * Texture coordinate on the sky dome that faces a world direction, expressed
- * as (u, v) with v = 0 at the zenith and v = 1 at the nadir. Reading the dome's
- * own vertex data avoids depending on the sphere builder's UV convention.
- */
-const findSkyUvTowards = (dome: Mesh, direction: Vector3): { u: number; v: number } => {
-  const positions = dome.getVerticesData(VertexBuffer.PositionKind);
-  const uvs = dome.getVerticesData(VertexBuffer.UVKind);
-  if (!positions || !uvs) {
-    return { u: 0.5, v: 0.2 };
-  }
-
-  const target = direction.normalizeToNew();
-  let bestDot = -Infinity;
-  let bestIndex = 0;
-  let topV = 0;
-  let topY = -Infinity;
-  let bottomV = 1;
-  let bottomY = Infinity;
-
-  for (let index = 0; index < positions.length / 3; index += 1) {
-    const x = positions[index * 3];
-    const y = positions[index * 3 + 1];
-    const z = positions[index * 3 + 2];
-    const length = Math.hypot(x, y, z) || 1;
-    const dot = (x * target.x + y * target.y + z * target.z) / length;
-    if (dot > bestDot) {
-      bestDot = dot;
-      bestIndex = index;
-    }
-    if (y > topY) {
-      topY = y;
-      topV = uvs[index * 2 + 1];
-    }
-    if (y < bottomY) {
-      bottomY = y;
-      bottomV = uvs[index * 2 + 1];
-    }
-  }
-
-  const v = uvs[bestIndex * 2 + 1];
-  return {
-    u: uvs[bestIndex * 2],
-    v: (v - topV) / (bottomV - topV || 1),
-  };
-};
-
 const createOrbitRig = (
   scene: Scene,
   name: string,
@@ -191,6 +148,10 @@ const createOrbitRig = (
   camera.lowerRadiusLimit = limits.minRadius;
   camera.upperRadiusLimit = limits.maxRadius;
   camera.wheelDeltaPercentage = WHEEL_DELTA_PERCENTAGE;
+  // Depth precision scales with the near plane; the closest any rig gets to
+  // the scenery is its minimum radius, so the near plane can sit well out.
+  camera.minZ = Math.min(CAMERA_MAX_NEAR_M, limits.minRadius * CAMERA_NEAR_FRACTION);
+  camera.maxZ = CAMERA_FAR_M;
   // The auto pose owns the look-at point, and Babylon pans by mutating the
   // target vector in place, so panning would only fight the shot tracking.
   camera.panningSensibility = 0;
@@ -247,37 +208,17 @@ export const createSceneController = (canvas: HTMLCanvasElement): SceneControlle
     stencil: true,
   });
   const scene = new Scene(engine);
-  scene.clearColor = new Color4(0.8, 0.9, 1, 1);
+  const horizon = toColor3(PALETTE.sky.horizon);
+  scene.clearColor = new Color4(horizon.r, horizon.g, horizon.b, 1);
   scene.fogMode = Scene.FOGMODE_EXP2;
   scene.fogDensity = FOG_DENSITY;
-  scene.fogColor = FOG_COLOR;
+  // Fog matches the sky's horizon so distant ground melts into it.
+  scene.fogColor = horizon;
 
-  // Filmic tone mapping applies inside every StandardMaterial and PBRMaterial,
-  // so no post-process pass is needed for it.
-  const imageProcessing = scene.imageProcessingConfiguration;
-  imageProcessing.toneMappingEnabled = true;
-  imageProcessing.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
-  imageProcessing.exposure = TONEMAP_EXPOSURE;
-  imageProcessing.contrast = TONEMAP_CONTRAST;
-  imageProcessing.vignetteEnabled = true;
-  imageProcessing.vignetteWeight = VIGNETTE_WEIGHT;
-  imageProcessing.vignetteColor = new Color4(0, 0, 0, 0);
-
-  const skyDome = MeshBuilder.CreateSphere(
-    "sky-dome",
-    {
-      diameter: SKY_DOME_DIAMETER_M,
-      segments: 32,
-      sideOrientation: Mesh.BACKSIDE,
-    },
-    scene,
-  );
-  skyDome.isPickable = false;
-  const sunUv = findSkyUvTowards(skyDome, SUN_LIGHT_DIRECTION.scale(-1));
+  createSky(scene, SUN_LIGHT_DIRECTION);
 
   const field = createFieldModel();
-  const materials = createFieldMaterials(scene, field, sunUv);
-  skyDome.material = materials.sky;
+  const materials = createFieldMaterials(scene, field);
 
   const terrain = createTerrainMesh(scene, field);
   terrain.material = materials.terrain;
@@ -289,22 +230,31 @@ export const createSceneController = (canvas: HTMLCanvasElement): SceneControlle
     scene,
   );
   hemiLight.intensity = SKY_LIGHT_INTENSITY;
-  hemiLight.diffuse = SKY_LIGHT_COLOR;
-  hemiLight.groundColor = GROUND_BOUNCE_COLOR;
+  hemiLight.diffuse = toColor3(PALETTE.light.sky);
+  hemiLight.groundColor = toColor3(PALETTE.light.groundBounce);
 
   const sun = new DirectionalLight("sun-light", SUN_LIGHT_DIRECTION.clone(), scene);
   sun.intensity = SUN_INTENSITY;
-  sun.diffuse = SUN_COLOR;
-  sun.specular = SUN_COLOR;
-  sun.position = new Vector3(92, 130, -46);
+  sun.diffuse = toColor3(PALETTE.light.sun);
+  sun.specular = toColor3(PALETTE.light.sun);
+  sun.position = SUN_LIGHT_DIRECTION.normalizeToNew().scale(-SUN_SHADOW_DISTANCE_M);
 
   const shadowGenerator = new ShadowGenerator(SHADOW_MAP_SIZE, sun);
   shadowGenerator.usePercentageCloserFiltering = true;
   shadowGenerator.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
   shadowGenerator.bias = SHADOW_BIAS;
   shadowGenerator.normalBias = SHADOW_NORMAL_BIAS;
+  shadowGenerator.setDarkness(SHADOW_DARKNESS);
 
-  populateFieldProps(scene, field, materials, shadowGenerator);
+  createCourseDetails(scene, field);
+  const outsideFieldHeightAt = populateFieldProps(scene, field, materials);
+  // The scene renders straight away; vegetation appears once its models load,
+  // and a failed load leaves a playable, if bare, course.
+  populateVegetation(scene, field, materials.vegetation, shadowGenerator, outsideFieldHeightAt).catch(
+    (error: unknown) => {
+      console.warn("Vegetation models failed to load; continuing without them.", error);
+    },
+  );
 
   const rigs: Record<ReplayCameraMode, OrbitRig> = {
     chase: createOrbitRig(
@@ -335,6 +285,11 @@ export const createSceneController = (canvas: HTMLCanvasElement): SceneControlle
       DISPERSION_LIMITS,
     ),
   };
+
+  const postProcessing = createPostProcessing(
+    scene,
+    Object.values(rigs).map((rig) => rig.camera),
+  );
 
   let activeCameraMode: ReplayCameraMode = "broadcast";
   // Damped stand-in for the raw travel direction, so the chase camera swings
@@ -426,6 +381,9 @@ export const createSceneController = (canvas: HTMLCanvasElement): SceneControlle
     },
     getGroundHeightAt(x, z) {
       return field.getHeight(x, z);
+    },
+    setGraphicsQuality(quality) {
+      postProcessing.setQuality(quality);
     },
     resize() {
       engine.resize();

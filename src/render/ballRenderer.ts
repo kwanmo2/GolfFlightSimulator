@@ -3,21 +3,29 @@ import {
   DynamicTexture,
   Mesh,
   MeshBuilder,
-  PBRMaterial,
+  FresnelParameters,
   Scene,
   StandardMaterial,
   Texture,
   Vector3,
 } from "@babylonjs/core";
 import type { SimulationFrame } from "../types/simulation";
+import { PALETTE, toColor3 } from "./palette";
 
 export interface BallRenderer {
   mesh: Mesh;
   update(frame: SimulationFrame): void;
 }
 
-/** Visual terrain height at a point; the physics ground is the y = 0 plane. */
+/** Terrain height at a point, in world Y. Simulated positions are already in world space. */
 export type GroundHeightResolver = (x: number, z: number) => number;
+
+const BALL_SPECULAR = 0.35;
+const BALL_SPECULAR_POWER = 48;
+const BALL_EMISSIVE = 0.22;
+const BALL_RIM_POWER = 2.5;
+const BALL_DIMPLE_STRENGTH = 0.5;
+const BALL_SHADOW_ALPHA = 0.28;
 
 const createDimpleNormalTexture = (
   scene: Scene,
@@ -79,16 +87,23 @@ const createDimpleNormalTexture = (
   return texture;
 };
 
-const createUrethaneBallMaterial = (scene: Scene): PBRMaterial => {
-  const material = new PBRMaterial("golf-ball-material", scene);
-  material.albedoColor = new Color3(0.985, 0.985, 0.978);
-  material.roughness = 0.43;
-  material.metallic = 0.03;
-  material.microSurface = 0.82;
-  material.reflectivityColor = new Color3(0.18, 0.18, 0.18);
+/**
+ * Bright, softly lit ball with a fresnel rim so it separates from both sky
+ * and grass. Emissive keeps it readable in shadow and at broadcast distance.
+ */
+const createBallMaterial = (scene: Scene): StandardMaterial => {
+  const material = new StandardMaterial("golf-ball-material", scene);
+  material.diffuseColor = toColor3(PALETTE.ball.body);
+  material.specularColor = new Color3(BALL_SPECULAR, BALL_SPECULAR, BALL_SPECULAR);
+  material.specularPower = BALL_SPECULAR_POWER;
+  material.emissiveColor = toColor3(PALETTE.ball.body).scale(BALL_EMISSIVE);
+  material.emissiveFresnelParameters = new FresnelParameters({
+    leftColor: toColor3(PALETTE.ball.rim),
+    rightColor: Color3.Black(),
+    power: BALL_RIM_POWER,
+  });
   material.bumpTexture = createDimpleNormalTexture(scene);
-  material.bumpTexture.level = 0.8;
-  material.emissiveColor = new Color3(0.015, 0.015, 0.013);
+  material.bumpTexture.level = BALL_DIMPLE_STRENGTH;
   return material;
 };
 
@@ -105,7 +120,7 @@ export const createBallRenderer = (
     },
     scene,
   );
-  mesh.material = createUrethaneBallMaterial(scene);
+  mesh.material = createBallMaterial(scene);
 
   const shadow = MeshBuilder.CreateDisc(
     "ball-shadow",
@@ -119,27 +134,23 @@ export const createBallRenderer = (
   shadow.position.y = 0.01;
 
   const shadowMaterial = new StandardMaterial("ball-shadow-material", scene);
-  shadowMaterial.diffuseColor = new Color3(0.05, 0.12, 0.05);
-  shadowMaterial.alpha = 0.24;
+  shadowMaterial.diffuseColor = toColor3(PALETTE.ball.shadow);
+  shadowMaterial.specularColor = Color3.Black();
+  shadowMaterial.alpha = BALL_SHADOW_ALPHA;
   shadow.material = shadowMaterial;
 
   return {
     mesh,
     update(frame) {
-      // Lift by the drawn terrain so the ball rests on the rendered surface;
-      // the simulation itself still runs against flat ground.
       const groundY = groundHeightAt(frame.position.x, frame.position.z);
-      mesh.position.copyFromFloats(
-        frame.position.x,
-        frame.position.y + groundY,
-        frame.position.z,
-      );
+      const heightAboveGround = Math.max(0, frame.position.y - groundY);
+      mesh.position.copyFromFloats(frame.position.x, frame.position.y, frame.position.z);
 
       mesh.rotation.z += 0.028;
       shadow.position.copyFrom(new Vector3(frame.position.x, groundY + 0.01, frame.position.z));
-      shadow.scaling.x = 1 + Math.min(frame.position.y * 0.04, 2.4);
+      shadow.scaling.x = 1 + Math.min(heightAboveGround * 0.04, 2.4);
       shadow.scaling.y = shadow.scaling.x;
-      shadow.visibility = Math.max(0.28, 1 - Math.min(frame.position.y / 90, 0.62));
+      shadow.visibility = Math.max(0.28, 1 - Math.min(heightAboveGround / 90, 0.62));
     },
   };
 };

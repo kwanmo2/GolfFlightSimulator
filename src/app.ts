@@ -112,6 +112,9 @@ export class GolfFlightApp {
         this.cameraMode = camera;
         this.sceneController.setActiveCamera(camera);
       },
+      onGraphicsQualityChange: (quality) => {
+        this.sceneController.setGraphicsQuality(quality);
+      },
       onTrajectoryModeChange: (mode) => {
         this.trajectoryMode = mode;
         this.updateTrajectoryDisplay();
@@ -177,6 +180,7 @@ export class GolfFlightApp {
       config: this.physicsConfig,
       shot: normalized,
       surfaceResolver: (x, z) => this.sceneController.getSurfaceTypeAt(x, z),
+      groundHeightResolver: (x, z) => this.sceneController.getGroundHeightAt(x, z),
     });
   }
 

@@ -164,5 +164,16 @@ export const sampleShots: ShotInput[] = [
     spinAxis: 0,
     units: mphUnits,
   },
+  {
+    name: "Pushed Into Water",
+    description: "Starts well right and finishes in the pond beside the driving zone.",
+    clubType: "driver",
+    ballSpeed: 150,
+    launchAngle: 14,
+    launchDirection: 22,
+    backSpin: 3000,
+    sideSpin: 0,
+    units: mphUnits,
+  },
 ];
 
