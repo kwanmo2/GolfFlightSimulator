@@ -4,16 +4,21 @@ import {
   Color4,
   DirectionalLight,
   Engine,
-  HemisphericLight,
   Scene,
-  ShadowGenerator,
   Vector3,
 } from "@babylonjs/core";
 import { createFieldMaterials } from "./materials";
-import { PALETTE, toColor3 } from "./palette";
 import { createPostProcessing } from "./postProcess";
 import { createCourseDetails } from "./courseDetails";
 import { populateFieldProps } from "./props";
+import {
+  ATMOSPHERE,
+  DEFAULT_GRAPHICS_QUALITY,
+  ENVIRONMENT,
+  SUN_LIGHT,
+  SUN_LIGHT_DIRECTION,
+} from "./renderConfig";
+import { createShadowSystem } from "./shadows";
 import { createSky } from "./sky";
 import { createFieldModel, createTerrainMesh } from "./terrain";
 import { populateVegetation } from "./vegetation";
@@ -75,25 +80,6 @@ const CAMERA_MAX_NEAR_M = 4;
 /** Far enough for the sky dome from anywhere on the course. */
 const CAMERA_FAR_M = 3000;
 const WHEEL_DELTA_PERCENTAGE = 0.02;
-
-// Late-morning sun from the golfer's front-right; the sky texture paints its
-// glow at the matching spot on the dome.
-// About 40 degrees up: low enough that mounds, banks and the green plateau
-// pick up readable light and shade, high enough to keep shadows compact.
-const SUN_LIGHT_DIRECTION = new Vector3(-0.62, -0.62, 0.3);
-const SUN_INTENSITY = 1.45;
-/** Distance back along the sunlight to place the light for shadow depth. */
-const SUN_SHADOW_DISTANCE_M = 180;
-// A strong, warm sky fill keeps shaded sides soft and colourful instead of
-// muddy, which is most of what makes the flat palette read as "soft".
-const SKY_LIGHT_INTENSITY = 0.6;
-const FOG_DENSITY = 0.0011;
-
-const SHADOW_MAP_SIZE = 2048;
-const SHADOW_BIAS = 0.0008;
-const SHADOW_NORMAL_BIAS = 0.02;
-/** Fraction of light left inside shadows (0 = black). */
-const SHADOW_DARKNESS = 0.45;
 
 const CHASE_INITIAL_ALPHA = -Math.PI / 2;
 const CHASE_ALPHA_SMOOTHING = 0.08;
@@ -208,14 +194,17 @@ export const createSceneController = (canvas: HTMLCanvasElement): SceneControlle
     stencil: true,
   });
   const scene = new Scene(engine);
-  const horizon = toColor3(PALETTE.sky.horizon);
-  scene.clearColor = new Color4(horizon.r, horizon.g, horizon.b, 1);
+  // Fog is applied in linear space before tone mapping, so the panorama's
+  // measured linear horizon colour is what makes distant ground melt into it.
+  const haze = ENVIRONMENT.horizonLinear.scale(ATMOSPHERE.fogBrightness);
+  scene.clearColor = new Color4(haze.r, haze.g, haze.b, 1);
   scene.fogMode = Scene.FOGMODE_EXP2;
-  scene.fogDensity = FOG_DENSITY;
-  // Fog matches the sky's horizon so distant ground melts into it.
-  scene.fogColor = horizon;
+  scene.fogDensity = ATMOSPHERE.fogDensity;
+  scene.fogColor = haze;
 
-  createSky(scene, SUN_LIGHT_DIRECTION);
+  // Sky light on every PBR surface comes from the panorama; the sun below
+  // supplies the direct light and shadows.
+  createSky(scene);
 
   const field = createFieldModel();
   const materials = createFieldMaterials(scene, field);
@@ -224,33 +213,19 @@ export const createSceneController = (canvas: HTMLCanvasElement): SceneControlle
   terrain.material = materials.terrain;
   terrain.receiveShadows = true;
 
-  const hemiLight = new HemisphericLight(
-    "hemi-light",
-    new Vector3(-0.12, 1, -0.08),
-    scene,
-  );
-  hemiLight.intensity = SKY_LIGHT_INTENSITY;
-  hemiLight.diffuse = toColor3(PALETTE.light.sky);
-  hemiLight.groundColor = toColor3(PALETTE.light.groundBounce);
-
   const sun = new DirectionalLight("sun-light", SUN_LIGHT_DIRECTION.clone(), scene);
-  sun.intensity = SUN_INTENSITY;
-  sun.diffuse = toColor3(PALETTE.light.sun);
-  sun.specular = toColor3(PALETTE.light.sun);
-  sun.position = SUN_LIGHT_DIRECTION.normalizeToNew().scale(-SUN_SHADOW_DISTANCE_M);
+  sun.intensity = SUN_LIGHT.intensity;
+  sun.diffuse = SUN_LIGHT.color.clone();
+  sun.specular = SUN_LIGHT.color.clone();
+  sun.position = SUN_LIGHT_DIRECTION.scale(-SUN_LIGHT.shadowDistanceM);
 
-  const shadowGenerator = new ShadowGenerator(SHADOW_MAP_SIZE, sun);
-  shadowGenerator.usePercentageCloserFiltering = true;
-  shadowGenerator.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
-  shadowGenerator.bias = SHADOW_BIAS;
-  shadowGenerator.normalBias = SHADOW_NORMAL_BIAS;
-  shadowGenerator.setDarkness(SHADOW_DARKNESS);
+  const shadows = createShadowSystem(sun, DEFAULT_GRAPHICS_QUALITY);
 
   createCourseDetails(scene, field);
   const outsideFieldHeightAt = populateFieldProps(scene, field, materials);
   // The scene renders straight away; vegetation appears once its models load,
   // and a failed load leaves a playable, if bare, course.
-  populateVegetation(scene, field, materials.vegetation, shadowGenerator, outsideFieldHeightAt).catch(
+  populateVegetation(scene, field, materials.vegetation, shadows, outsideFieldHeightAt).catch(
     (error: unknown) => {
       console.warn("Vegetation models failed to load; continuing without them.", error);
     },
@@ -313,7 +288,7 @@ export const createSceneController = (canvas: HTMLCanvasElement): SceneControlle
     },
     attachFollowTarget(target) {
       rigs.chase.camera.target.copyFrom(target.position);
-      shadowGenerator.addShadowCaster(target, false);
+      shadows.addShadowCaster(target);
     },
     updateReplayCamera(frame, metrics) {
       // Only the active camera receives input, so it is the only rig whose pose
@@ -384,6 +359,7 @@ export const createSceneController = (canvas: HTMLCanvasElement): SceneControlle
     },
     setGraphicsQuality(quality) {
       postProcessing.setQuality(quality);
+      shadows.setQuality(quality);
     },
     resize() {
       engine.resize();

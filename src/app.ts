@@ -291,6 +291,7 @@ export class GolfFlightApp {
     this.debugPanel.setRuntimeStats({
       frame,
       metrics: this.simulation.metrics,
+      fps: this.sceneController.engine.getFps(),
     });
   }
 

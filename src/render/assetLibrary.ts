@@ -1,7 +1,7 @@
 import "@babylonjs/loaders/glTF";
 import { LoadAssetContainerAsync, Mesh, Scene, VertexBuffer } from "@babylonjs/core";
 import type { Material } from "@babylonjs/core";
-import { PALETTE, toColor3 } from "./palette";
+import { PALETTE, toLinearColor3 } from "./palette";
 
 /** CC0 Kenney Nature Kit models; see public/models/LICENSE.md. */
 const MODEL_ROOT = "/models/";
@@ -46,7 +46,7 @@ const paintPart = (mesh: Mesh, colors: KitMaterialColors): void => {
     return;
   }
   const materialName = mesh.material?.name ?? "";
-  const base = toColor3(colors[materialName] ?? FALLBACK_COLOR);
+  const base = toLinearColor3(colors[materialName] ?? FALLBACK_COLOR);
 
   let minY = Infinity;
   let maxY = -Infinity;

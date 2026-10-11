@@ -1,12 +1,12 @@
 import { Color3, Color4 } from "@babylonjs/core";
 
 /**
- * Single source of truth for the scene's colours. The look is "soft flat":
- * every surface is a flat palette colour, shaped only by lighting, soft
- * shadows and ambient occlusion, so the course reads as one consistent style.
+ * Painted colours for course surfaces, vegetation, props and overlays. Sky,
+ * light and tone settings live in renderConfig.ts.
  *
- * Values are sRGB hex strings. Use toColor3 / toColor4 to get a fresh Babylon
- * colour; Babylon colours are mutable, so shared instances are never exported.
+ * Values are sRGB hex strings. Use toLinearColor3 for physically based
+ * materials and toColor3 / toColor4 for unlit overlays; each returns a fresh
+ * Babylon colour, since Babylon colours are mutable.
  */
 export const PALETTE = {
   surface: {
@@ -31,19 +31,6 @@ export const PALETTE = {
     flowerYellow: "#f4cf45",
     flowerWhite: "#f6f2e6",
   },
-  sky: {
-    zenith: "#4b97e6",
-    mid: "#7fbaf0",
-    horizon: "#d6eaf6",
-    belowHorizon: "#cfe2d6",
-    cloud: "#ffffff",
-    cloudShade: "#dde8f2",
-  },
-  light: {
-    sun: "#fff3dc",
-    sky: "#d4e6ff",
-    groundBounce: "#7d8f52",
-  },
   props: {
     flag: "#e8412c",
     flagText: "#fffaf0",
@@ -59,7 +46,6 @@ export const PALETTE = {
   },
   ball: {
     body: "#ffffff",
-    rim: "#e8f4ff",
     shadow: "#274a1c",
   },
   trajectory: {
@@ -73,6 +59,9 @@ export const PALETTE = {
 } as const;
 
 export const toColor3 = (hex: string): Color3 => Color3.FromHexString(hex);
+
+/** Linear colour for physically based materials, which do their lighting in linear space. */
+export const toLinearColor3 = (hex: string): Color3 => Color3.FromHexString(hex).toLinearSpace();
 
 export const toColor4 = (hex: string, alpha = 1): Color4 => {
   const color = Color3.FromHexString(hex);

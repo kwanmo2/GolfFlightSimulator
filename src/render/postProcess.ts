@@ -7,25 +7,20 @@ import {
   SSAO2RenderingPipeline,
 } from "@babylonjs/core";
 import type { GraphicsQuality } from "../types/simulation";
-
-// Khronos PBR Neutral keeps palette hues intact where ACES would shift and
-// desaturate them, so the colours on screen match palette.ts.
-const TONEMAP_EXPOSURE = 1.05;
-const TONEMAP_CONTRAST = 1.08;
-const SATURATION_BOOST = 4;
-const VIGNETTE_WEIGHT = 0.9;
+import { DEFAULT_GRAPHICS_QUALITY, QUALITY_PRESETS, TONE } from "./renderConfig";
 
 const MSAA_SAMPLES = 4;
 
-// A faint glow on the brightest highlights only (sun-lit cloud tops, the ball).
-const BLOOM_THRESHOLD = 0.92;
-const BLOOM_WEIGHT = 0.12;
+// The pipeline renders in HDR, so bloom only picks up what is far brighter
+// than sunlit grass or sand: the sun disc, its glare on the water, the ball.
+const BLOOM_THRESHOLD = 2.5;
+const BLOOM_WEIGHT = 0.15;
 const BLOOM_KERNEL = 48;
 const BLOOM_SCALE = 0.5;
 
 // Ambient occlusion sized for tree bases, bunker lips and grass clumps.
 // Distances are in metres; maxZ skips the far hills where AO only adds noise.
-const SSAO_PIPELINE_NAME = "soft-flat-ssao";
+const SSAO_PIPELINE_NAME = "scene-ssao";
 const SSAO_RATIO = 0.5;
 const SSAO_RADIUS_M = 1.6;
 const SSAO_STRENGTH = 0.9;
@@ -37,30 +32,31 @@ export interface PostProcessController {
   setQuality(quality: GraphicsQuality): void;
 }
 
+// ACES rolls off bright sky and sunlit surfaces the way film does, which is
+// most of what reads as "photographic" rather than "painted".
 const configureImageProcessing = (configuration: ImageProcessingConfiguration): void => {
   configuration.toneMappingEnabled = true;
-  configuration.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_KHR_PBR_NEUTRAL;
-  configuration.exposure = TONEMAP_EXPOSURE;
-  configuration.contrast = TONEMAP_CONTRAST;
+  configuration.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
+  configuration.exposure = TONE.exposure;
+  configuration.contrast = TONE.contrast;
   configuration.vignetteEnabled = true;
-  configuration.vignetteWeight = VIGNETTE_WEIGHT;
+  configuration.vignetteWeight = TONE.vignetteWeight;
   configuration.vignetteColor.set(0, 0, 0, 0);
 
   const curves = new ColorCurves();
-  curves.globalSaturation = SATURATION_BOOST;
+  curves.globalSaturation = TONE.saturation;
   configuration.colorCurves = curves;
   configuration.colorCurvesEnabled = true;
 };
 
 /**
- * Post stack for the soft flat look: MSAA, a restrained bloom, tone mapping
- * that respects the palette, and SSAO for contact shading. The "standard"
- * quality drops SSAO, the one expensive pass.
+ * HDR post stack: MSAA, a restrained bloom, ACES tone mapping, and SSAO for
+ * contact shading where the quality preset allows it.
  */
 export const createPostProcessing = (scene: Scene, cameras: Camera[]): PostProcessController => {
   configureImageProcessing(scene.imageProcessingConfiguration);
 
-  const pipeline = new DefaultRenderingPipeline("soft-flat-pipeline", true, scene, cameras);
+  const pipeline = new DefaultRenderingPipeline("scene-pipeline", true, scene, cameras);
   pipeline.samples = MSAA_SAMPLES;
   pipeline.fxaaEnabled = false;
   pipeline.bloomEnabled = true;
@@ -84,11 +80,15 @@ export const createPostProcessing = (scene: Scene, cameras: Camera[]): PostProce
   // Toggled by attaching and detaching rather than rebuilding: disposing the
   // pipeline also tears down the shared prepass and blanks the frame.
   let ssaoAttached = ssao !== null;
+  if (ssao && !QUALITY_PRESETS[DEFAULT_GRAPHICS_QUALITY].ssao) {
+    scene.postProcessRenderPipelineManager.detachCamerasFromRenderPipeline(SSAO_PIPELINE_NAME, cameras);
+    ssaoAttached = false;
+  }
   const manager = scene.postProcessRenderPipelineManager;
 
   return {
     setQuality(quality) {
-      const wantSsao = quality === "high" && ssao !== null;
+      const wantSsao = QUALITY_PRESETS[quality].ssao && ssao !== null;
       if (wantSsao === ssaoAttached) {
         return;
       }

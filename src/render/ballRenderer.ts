@@ -3,14 +3,14 @@ import {
   DynamicTexture,
   Mesh,
   MeshBuilder,
-  FresnelParameters,
+  PBRMaterial,
   Scene,
   StandardMaterial,
   Texture,
   Vector3,
 } from "@babylonjs/core";
 import type { SimulationFrame } from "../types/simulation";
-import { PALETTE, toColor3 } from "./palette";
+import { PALETTE, toColor3, toLinearColor3 } from "./palette";
 
 export interface BallRenderer {
   mesh: Mesh;
@@ -20,10 +20,11 @@ export interface BallRenderer {
 /** Terrain height at a point, in world Y. Simulated positions are already in world space. */
 export type GroundHeightResolver = (x: number, z: number) => number;
 
-const BALL_SPECULAR = 0.35;
-const BALL_SPECULAR_POWER = 48;
-const BALL_EMISSIVE = 0.22;
-const BALL_RIM_POWER = 2.5;
+/** Satin urethane cover under a glossy clear coat. */
+const BALL_ROUGHNESS = 0.45;
+const BALL_CLEAR_COAT_ROUGHNESS = 0.08;
+/** A little self-light keeps the ball readable in shadow and at broadcast distance. */
+const BALL_EMISSIVE = 0.12;
 const BALL_DIMPLE_STRENGTH = 0.5;
 const BALL_SHADOW_ALPHA = 0.28;
 
@@ -88,20 +89,17 @@ const createDimpleNormalTexture = (
 };
 
 /**
- * Bright, softly lit ball with a fresnel rim so it separates from both sky
- * and grass. Emissive keeps it readable in shadow and at broadcast distance.
+ * White dimpled ball with a clear coat, so it catches a sharp sky highlight
+ * over a soft base. Emissive keeps it readable in shadow.
  */
-const createBallMaterial = (scene: Scene): StandardMaterial => {
-  const material = new StandardMaterial("golf-ball-material", scene);
-  material.diffuseColor = toColor3(PALETTE.ball.body);
-  material.specularColor = new Color3(BALL_SPECULAR, BALL_SPECULAR, BALL_SPECULAR);
-  material.specularPower = BALL_SPECULAR_POWER;
-  material.emissiveColor = toColor3(PALETTE.ball.body).scale(BALL_EMISSIVE);
-  material.emissiveFresnelParameters = new FresnelParameters({
-    leftColor: toColor3(PALETTE.ball.rim),
-    rightColor: Color3.Black(),
-    power: BALL_RIM_POWER,
-  });
+const createBallMaterial = (scene: Scene): PBRMaterial => {
+  const material = new PBRMaterial("golf-ball-material", scene);
+  material.albedoColor = toLinearColor3(PALETTE.ball.body);
+  material.metallic = 0;
+  material.roughness = BALL_ROUGHNESS;
+  material.clearCoat.isEnabled = true;
+  material.clearCoat.roughness = BALL_CLEAR_COAT_ROUGHNESS;
+  material.emissiveColor = toLinearColor3(PALETTE.ball.body).scale(BALL_EMISSIVE);
   material.bumpTexture = createDimpleNormalTexture(scene);
   material.bumpTexture.level = BALL_DIMPLE_STRENGTH;
   return material;

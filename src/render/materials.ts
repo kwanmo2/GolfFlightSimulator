@@ -1,28 +1,28 @@
 import {
-  Color3,
   Constants,
   DynamicTexture,
+  PBRMaterial,
   RawTexture,
   Scene,
-  StandardMaterial,
   Texture,
 } from "@babylonjs/core";
-import { PALETTE, toColor3 } from "./palette";
+import { PALETTE, toLinearColor3 } from "./palette";
 import { clamp, clamp01, smoothstep, valueNoise } from "./proceduralNoise";
+import { SUN_TOWARD } from "./renderConfig";
 import { SURFACE_THRESHOLDS } from "./terrain";
 import type { FieldModel, SurfaceWeights } from "./terrain";
 import { TerrainStylePlugin } from "./terrainStylePlugin";
 
 export interface FieldMaterials {
-  terrain: StandardMaterial;
-  backdrop: StandardMaterial;
-  flag: StandardMaterial;
-  pole: StandardMaterial;
-  cupHole: StandardMaterial;
-  cupRim: StandardMaterial;
-  teeMarker: StandardMaterial;
+  terrain: PBRMaterial;
+  backdrop: PBRMaterial;
+  flag: PBRMaterial;
+  pole: PBRMaterial;
+  cupHole: PBRMaterial;
+  cupRim: PBRMaterial;
+  teeMarker: PBRMaterial;
   /** Shared by every tree, bush and grass clump; their colour lives in vertex colours. */
-  vegetation: StandardMaterial;
+  vegetation: PBRMaterial;
 }
 
 interface RgbColor {
@@ -39,8 +39,11 @@ const LOOKUP_WIDTH = 1024;
 const LOOKUP_HEIGHT = 2048;
 /** Tint maps encode a multiplier around 1.0 as bytes centred on this value. */
 const TINT_NEUTRAL = 128;
-/** Horizontal direction toward the sun (see SUN_LIGHT_DIRECTION in scene.ts). */
-const SUN_XZ = { x: 0.9, z: -0.435 };
+/** Horizontal direction toward the sun. */
+const SUN_XZ = (() => {
+  const length = Math.hypot(SUN_TOWARD.x, SUN_TOWARD.z) || 1;
+  return { x: SUN_TOWARD.x / length, z: SUN_TOWARD.z / length };
+})();
 
 // Mowing stripes run across the fairway.
 const FAIRWAY_STRIPE_WIDTH_M = 6;
@@ -57,8 +60,12 @@ const SAND_DAMP_EDGE = 0.1;
 const POND_BED_SHADE = 0.55;
 const SAND_WALL_SHADE = 0.14;
 
-/** Faint highlight on painted props: enough to show their shape without looking glossy. */
-const PROP_SPECULAR = new Color3(0.08, 0.08, 0.08);
+// Roughness for the PBR surfaces: grass and sand scatter almost all light,
+// painted props have a soft satin sheen, leaves sit in between.
+const TERRAIN_ROUGHNESS = 0.92;
+const PAINT_ROUGHNESS = 0.55;
+const FOLIAGE_ROUGHNESS = 0.8;
+const FLAG_ROUGHNESS = 0.85;
 
 /**
  * Resolve the overlapping surface weights into an exclusive blend that sums to
@@ -185,6 +192,8 @@ const createTerrainLookupTextures = (
     texture.wrapU = Texture.CLAMP_ADDRESSMODE;
     texture.wrapV = Texture.CLAMP_ADDRESSMODE;
     texture.anisotropicFilteringLevel = TEXTURE_ANISOTROPY;
+    // Both lookups hold data, not colour: no sRGB decode when sampled.
+    texture.gammaSpace = false;
     return texture;
   };
 
@@ -210,28 +219,36 @@ const createFlagTexture = (scene: Scene): DynamicTexture => {
   return texture;
 };
 
-const createFlatMaterial = (scene: Scene, name: string, hex: string): StandardMaterial => {
-  const material = new StandardMaterial(name, scene);
-  material.diffuseColor = toColor3(hex);
-  material.specularColor = PROP_SPECULAR.clone();
+/** Non-metallic PBR material in one flat palette colour. */
+export const createPaintedMaterial = (
+  scene: Scene,
+  name: string,
+  hex: string,
+  roughness = PAINT_ROUGHNESS,
+): PBRMaterial => {
+  const material = new PBRMaterial(name, scene);
+  material.albedoColor = toLinearColor3(hex);
+  material.metallic = 0;
+  material.roughness = roughness;
   return material;
 };
 
 export const createFieldMaterials = (scene: Scene, field: FieldModel): FieldMaterials => {
   const lookups = createTerrainLookupTextures(scene, field);
 
-  const terrain = new StandardMaterial("terrain-material", scene);
-  terrain.diffuseTexture = lookups.tint;
-  terrain.specularColor = Color3.Black();
+  const terrain = new PBRMaterial("terrain-material", scene);
+  terrain.albedoTexture = lookups.tint;
+  terrain.metallic = 0;
+  terrain.roughness = TERRAIN_ROUGHNESS;
   new TerrainStylePlugin(terrain).setStyle(
     lookups.mask,
     {
-      rough: toColor3(PALETTE.surface.rough),
-      firstCut: toColor3(PALETTE.surface.firstCut),
-      fairway: toColor3(PALETTE.surface.fairway),
-      fringe: toColor3(PALETTE.surface.fringe),
-      green: toColor3(PALETTE.surface.green),
-      sand: toColor3(PALETTE.surface.sand),
+      rough: toLinearColor3(PALETTE.surface.rough),
+      firstCut: toLinearColor3(PALETTE.surface.firstCut),
+      fairway: toLinearColor3(PALETTE.surface.fairway),
+      fringe: toLinearColor3(PALETTE.surface.fringe),
+      green: toLinearColor3(PALETTE.surface.green),
+      sand: toLinearColor3(PALETTE.surface.sand),
     },
     {
       fairway: SURFACE_THRESHOLDS.fairway,
@@ -241,19 +258,16 @@ export const createFieldMaterials = (scene: Scene, field: FieldModel): FieldMate
     },
   );
 
-  const backdrop = createFlatMaterial(scene, "backdrop-material", PALETTE.surface.backdrop);
-  backdrop.specularColor = Color3.Black();
+  const backdrop = createPaintedMaterial(scene, "backdrop-material", PALETTE.surface.backdrop, TERRAIN_ROUGHNESS);
 
-  const flag = new StandardMaterial("flag-material", scene);
-  flag.diffuseTexture = createFlagTexture(scene);
-  flag.specularColor = Color3.Black();
+  const flag = createPaintedMaterial(scene, "flag-material", "#ffffff", FLAG_ROUGHNESS);
+  flag.albedoTexture = createFlagTexture(scene);
   flag.backFaceCulling = false;
+  flag.twoSidedLighting = true;
 
   // Leaves and grass blades are single-sided cards in the kit, so they are
   // drawn and lit from both sides.
-  const vegetation = new StandardMaterial("vegetation-material", scene);
-  vegetation.diffuseColor = Color3.White();
-  vegetation.specularColor = Color3.Black();
+  const vegetation = createPaintedMaterial(scene, "vegetation-material", "#ffffff", FOLIAGE_ROUGHNESS);
   vegetation.backFaceCulling = false;
   vegetation.twoSidedLighting = true;
 
@@ -261,10 +275,10 @@ export const createFieldMaterials = (scene: Scene, field: FieldModel): FieldMate
     terrain,
     backdrop,
     flag,
-    pole: createFlatMaterial(scene, "flag-pole-material", PALETTE.props.pole),
-    cupHole: createFlatMaterial(scene, "cup-hole-material", PALETTE.props.cupHole),
-    cupRim: createFlatMaterial(scene, "cup-rim-material", PALETTE.props.cupRim),
-    teeMarker: createFlatMaterial(scene, "tee-marker-material", PALETTE.props.teeMarker),
+    pole: createPaintedMaterial(scene, "flag-pole-material", PALETTE.props.pole),
+    cupHole: createPaintedMaterial(scene, "cup-hole-material", PALETTE.props.cupHole, TERRAIN_ROUGHNESS),
+    cupRim: createPaintedMaterial(scene, "cup-rim-material", PALETTE.props.cupRim),
+    teeMarker: createPaintedMaterial(scene, "tee-marker-material", PALETTE.props.teeMarker),
     vegetation,
   };
 };

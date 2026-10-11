@@ -1,9 +1,10 @@
-import { Color4, Matrix, Mesh, Quaternion, Scene, ShadowGenerator, Vector3, VertexBuffer } from "@babylonjs/core";
+import { Color4, Matrix, Mesh, Quaternion, Scene, Vector3, VertexBuffer } from "@babylonjs/core";
 import type { Material } from "@babylonjs/core";
 import { loadModels } from "./assetLibrary";
 import type { ModelSpec } from "./assetLibrary";
 import { PALETTE } from "./palette";
 import { hash, smoothstep, valueNoise } from "./proceduralNoise";
+import type { ShadowSystem } from "./shadows";
 import type { FieldModel } from "./terrain";
 
 export type HeightResolver = (x: number, z: number) => number;
@@ -174,7 +175,7 @@ const placeInstances = (
   typicalHeightM: number,
   namePrefix: string,
   heightAt: HeightResolver,
-  shadowGenerator: ShadowGenerator | null,
+  shadowGenerator: ShadowSystem | null,
 ): void => {
   placements.forEach((placement, index) => {
     const pick = hash(placement.x * 0.37 + placement.z * 0.11);
@@ -188,7 +189,7 @@ const placeInstances = (
     instance.instancedBuffers[INSTANCE_TINT_KIND] = tintFor(index * 4.3 + 0.7, TREE_TINT_RANGE);
     instance.isPickable = false;
     if (shadowGenerator && placement.z < SHADOW_CASTER_MAX_Z) {
-      shadowGenerator.addShadowCaster(instance, false);
+      shadowGenerator.addShadowCaster(instance);
     }
   });
 };
@@ -330,7 +331,7 @@ export const populateVegetation = async (
   scene: Scene,
   field: FieldModel,
   material: Material,
-  shadowGenerator: ShadowGenerator | null,
+  shadowGenerator: ShadowSystem | null,
   outsideFieldHeightAt: HeightResolver,
 ): Promise<void> => {
   const [broadleaf, conifer, bushes, grass, flowers] = await Promise.all([

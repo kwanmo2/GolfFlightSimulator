@@ -1,5 +1,4 @@
 import {
-  Color3,
   DynamicTexture,
   Mesh,
   MeshBuilder,
@@ -8,8 +7,10 @@ import {
   Vector3,
   VertexBuffer,
 } from "@babylonjs/core";
+import type { Material } from "@babylonjs/core";
+import { createPaintedMaterial } from "./materials";
 import type { FieldMaterials } from "./materials";
-import { PALETTE, toColor3 } from "./palette";
+import { PALETTE } from "./palette";
 import { smoothstep } from "./proceduralNoise";
 import type { FieldModel } from "./terrain";
 import type { HeightResolver } from "./vegetation";
@@ -97,7 +98,7 @@ const createDistanceMarker = (
   field: FieldModel,
   distanceM: number,
   color: string,
-  postMaterial: StandardMaterial,
+  postMaterial: Material,
 ): void => {
   const label = `${distanceM}m`;
   const centerX = field.getCorridorCenterX(distanceM);
@@ -109,10 +110,7 @@ const createDistanceMarker = (
   );
   disc.rotation.x = Math.PI / 2;
   disc.position.set(centerX, field.getHeight(centerX, distanceM) + 0.03, distanceM);
-  const discMaterial = new StandardMaterial(`distance-marker-disc-material-${label}`, scene);
-  discMaterial.diffuseColor = toColor3(color);
-  discMaterial.specularColor = Color3.Black();
-  disc.material = discMaterial;
+  disc.material = createPaintedMaterial(scene, `distance-marker-disc-material-${label}`, color);
   disc.isPickable = false;
 
   const postX = centerX - field.getFairwayHalfWidth(distanceM) - MARKER_POST_EDGE_OFFSET_M;
@@ -137,7 +135,7 @@ const createDistanceMarker = (
   sign.isPickable = false;
 };
 
-const createBackdrop = (scene: Scene, field: FieldModel, material: StandardMaterial): Mesh => {
+const createBackdrop = (scene: Scene, field: FieldModel, material: Material): Mesh => {
   const backdrop = MeshBuilder.CreateGround(
     "backdrop-hills",
     {
@@ -253,9 +251,7 @@ export const populateFieldProps = (
 
   createPin(scene, field, materials);
 
-  const postMaterial = new StandardMaterial("distance-marker-post-material", scene);
-  postMaterial.diffuseColor = toColor3(PALETTE.props.markerPost);
-  postMaterial.specularColor = Color3.Black();
+  const postMaterial = createPaintedMaterial(scene, "distance-marker-post-material", PALETTE.props.markerPost);
   DISTANCE_MARKERS.forEach(({ distanceM, color }) => {
     createDistanceMarker(scene, field, distanceM, color, postMaterial);
   });

@@ -1,12 +1,6 @@
-import {
-  Color3,
-  Mesh,
-  MeshBuilder,
-  Scene,
-  StandardMaterial,
-  Vector3,
-} from "@babylonjs/core";
-import { PALETTE, toColor3 } from "./palette";
+import { Mesh, MeshBuilder, Scene, Vector3 } from "@babylonjs/core";
+import { createPaintedMaterial } from "./materials";
+import { PALETTE } from "./palette";
 import type { FieldModel } from "./terrain";
 
 /**
@@ -17,8 +11,9 @@ import type { FieldModel } from "./terrain";
 const WATER_PLANE_REACH = 1.2;
 const WATER_TESSELLATION = 96;
 const WATER_ALPHA = 0.9;
-const WATER_SPECULAR = 0.45;
-const WATER_SPECULAR_POWER = 64;
+/** Calm water: a glossy surface that mirrors a slightly blurred sky. */
+const WATER_ROUGHNESS = 0.06;
+const CART_PATH_ROUGHNESS = 0.85;
 
 /** Distance between cart path samples along the hole, metres. */
 const CART_PATH_STEP_M = 1.5;
@@ -40,10 +35,7 @@ const createPondWater = (scene: Scene, field: FieldModel): Mesh => {
   water.rotation.y = -pond.angleRad;
   water.position.set(pond.centerX, field.waterLevelY, pond.centerZ);
 
-  const material = new StandardMaterial("pond-water-material", scene);
-  material.diffuseColor = toColor3(PALETTE.surface.water);
-  material.specularColor = new Color3(WATER_SPECULAR, WATER_SPECULAR, WATER_SPECULAR);
-  material.specularPower = WATER_SPECULAR_POWER;
+  const material = createPaintedMaterial(scene, "pond-water-material", PALETTE.surface.water, WATER_ROUGHNESS);
   material.alpha = WATER_ALPHA;
   material.backFaceCulling = false;
   water.material = material;
@@ -82,9 +74,7 @@ const createCartPath = (scene: Scene, field: FieldModel): Mesh => {
     { pathArray: [left, right], sideOrientation: Mesh.DOUBLESIDE },
     scene,
   );
-  const material = new StandardMaterial("cart-path-material", scene);
-  material.diffuseColor = toColor3(PALETTE.surface.cartPath);
-  material.specularColor = Color3.Black();
+  const material = createPaintedMaterial(scene, "cart-path-material", PALETTE.surface.cartPath, CART_PATH_ROUGHNESS);
   material.zOffset = -2;
   path.material = material;
   path.isPickable = false;

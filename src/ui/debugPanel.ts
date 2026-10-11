@@ -17,6 +17,8 @@ import type {
 interface RuntimeStats {
   frame: SimulationFrame;
   metrics: ShotAnalysisMetrics;
+  /** Rendered frames per second, for checking the graphics presets. */
+  fps: number;
 }
 
 interface DebugPanelOptions {
@@ -408,7 +410,7 @@ export const createDebugPanel = ({
   const runtimeGrid = documentRef.createElement("dl");
   runtimeGrid.className = "stats-grid";
   const statValues = new Map<string, HTMLElement>();
-  ["Height", "Velocity", "Spin", "Phase", "Surface"].forEach((label) => {
+  ["Height", "Velocity", "Spin", "Phase", "Surface", "FPS"].forEach((label) => {
     const dt = documentRef.createElement("dt");
     dt.textContent = label;
     const dd = documentRef.createElement("dd");
@@ -487,7 +489,7 @@ export const createDebugPanel = ({
     setJson(shot) {
       textarea.value = JSON.stringify(shot, null, 2);
     },
-    setRuntimeStats({ frame, metrics }) {
+    setRuntimeStats({ frame, metrics, fps }) {
       summaryItems.ballSpeed.valueElement.textContent = `${metrics.ballSpeedMps.toFixed(1)} m/s`;
       summaryItems.launch.valueElement.textContent = `${formatAngle(metrics.launchAngleDeg)} / ${formatAngle(metrics.launchDirectionDeg)}`;
       summaryItems.spin.valueElement.textContent = `${metrics.spinRpm.toFixed(0)} rpm`;
@@ -504,6 +506,7 @@ export const createDebugPanel = ({
       statValues.get("Spin")!.textContent = formatSpin(frame.spin);
       statValues.get("Phase")!.textContent = frame.phase;
       statValues.get("Surface")!.textContent = frame.surface;
+      statValues.get("FPS")!.textContent = fps.toFixed(0);
     },
     setPaused(paused) {
       pauseButton.textContent = paused ? "Resume" : "Pause";

@@ -1,12 +1,12 @@
 import {
   MaterialDefines,
   MaterialPluginBase,
-  StandardMaterial,
+  PBRMaterial,
   UniformBuffer,
 } from "@babylonjs/core";
 import type { BaseTexture, Color3, Nullable, Texture } from "@babylonjs/core";
 
-/** Flat palette colour for each course surface. Tee boxes use the fairway colour. */
+/** Linear albedo for each course surface. Tee boxes use the fairway colour. */
 export interface TerrainStyleColors {
   rough: Color3;
   /** Collar of slightly longer grass just outside the fairway edge. */
@@ -70,10 +70,12 @@ float terrainStyleEdge(float weight, float threshold, float minSoftness) {
 #endif
 `;
 
-const fragmentUpdateDiffuse = `
+// Injected right after the PBR albedo is resolved; Babylon's PBR shader has
+// no dedicated albedo hook, and nothing reads surfaceAlbedo before this point.
+const fragmentUpdateAlbedo = `
 #ifdef TERRAIN_STYLE
 // RGBA weights: R = fairway/tee, G = green, B = bunker, A = fringe. Rough is the remainder.
-vec4 styleMask = texture2D(${MASK_SAMPLER}, vDiffuseUV);
+vec4 styleMask = texture2D(${MASK_SAMPLER}, vAlbedoUV);
 vec2 styleP = vPositionW.xz;
 
 // Diagonal mowing checker on the green: alternate squares catch the light differently.
@@ -89,15 +91,16 @@ styleColor = mix(styleColor, terrainStyleFringe.rgb, terrainStyleEdge(styleMask.
 styleColor = mix(styleColor, styleGreen, terrainStyleEdge(styleMask.g, terrainStyleThresholds.y, terrainStyleParams.w));
 styleColor = mix(styleColor, terrainStyleSand.rgb, terrainStyleEdge(styleMask.b, terrainStyleThresholds.z, terrainStyleParams.w));
 
-// The diffuse texture is a tint map centred on mid grey.
-baseColor.rgb = styleColor * baseColor.rgb * 2.0;
+// The albedo texture is a linear tint map centred on mid grey.
+surfaceAlbedo = styleColor * surfaceAlbedo * 2.0;
 #endif
 `;
 
 /**
- * Paints the course in flat palette colours. The splat mask (sampled through
- * the material's diffuse UV, a planar map of the field) decides which surface
- * each pixel shows; the diffuse texture carries the large-scale tint.
+ * Paints the course surfaces on a PBR terrain material. The splat mask
+ * (sampled through the material's albedo UV, a planar map of the field)
+ * decides which surface each pixel shows; the albedo texture carries the
+ * large-scale tint.
  */
 export class TerrainStylePlugin extends MaterialPluginBase {
   private mask: Nullable<Texture> = null;
@@ -110,7 +113,7 @@ export class TerrainStylePlugin extends MaterialPluginBase {
     minEdgeSoftness: 0.012,
   };
 
-  public constructor(material: StandardMaterial) {
+  public constructor(material: PBRMaterial) {
     super(material, "TerrainStyle", 200, { TERRAIN_STYLE: false });
   }
 
@@ -205,7 +208,7 @@ ${uniformNames.map((name) => `uniform vec4 ${name};`).join("\n")}
     }
     return {
       CUSTOM_FRAGMENT_DEFINITIONS: fragmentDefinitions,
-      CUSTOM_FRAGMENT_UPDATE_DIFFUSE: fragmentUpdateDiffuse,
+      CUSTOM_FRAGMENT_UPDATE_ALPHA: fragmentUpdateAlbedo,
     };
   }
 }
