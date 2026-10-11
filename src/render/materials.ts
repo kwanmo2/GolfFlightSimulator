@@ -8,13 +8,16 @@ import {
 } from "@babylonjs/core";
 import { PALETTE, toLinearColor3 } from "./palette";
 import { clamp, clamp01, smoothstep, valueNoise } from "./proceduralNoise";
-import { SUN_TOWARD } from "./renderConfig";
+import { DEFAULT_GRAPHICS_QUALITY, QUALITY_PRESETS, SUN_TOWARD, TERRAIN_SHADING } from "./renderConfig";
 import { SURFACE_THRESHOLDS } from "./terrain";
 import type { FieldModel, SurfaceWeights } from "./terrain";
-import { TerrainStylePlugin } from "./terrainStylePlugin";
+import { TerrainPbrPlugin } from "./terrainPbrPlugin";
+import { loadTerrainTextureArrays } from "./terrainTextures";
 
 export interface FieldMaterials {
   terrain: PBRMaterial;
+  /** Terrain shading; exposed so quality presets can adjust it. */
+  terrainPlugin: TerrainPbrPlugin;
   backdrop: PBRMaterial;
   flag: PBRMaterial;
   pole: PBRMaterial;
@@ -45,15 +48,25 @@ const SUN_XZ = (() => {
   return { x: SUN_TOWARD.x / length, z: SUN_TOWARD.z / length };
 })();
 
-// Mowing stripes run across the fairway.
+/**
+ * Mowing stripes run lengthwise, following the fairway's centre line: the
+ * mower travels toward and away from the tee, so the stripes show strongly
+ * from the tee and green cameras (see the shader's view-dependent sheen).
+ */
 const FAIRWAY_STRIPE_WIDTH_M = 6;
-const FAIRWAY_STRIPE_CONTRAST = 0.04;
 
-// Large, gentle colour variation keeps the flat colours from looking like paper.
+// Large, gentle variation so a fairway never reads as one flat colour.
 const BROAD_NOISE_SCALE = 0.02;
-const BROAD_NOISE_STRENGTH = 0.06;
+const BROAD_NOISE_STRENGTH = 0.08;
 const ROUGH_PATCH_SCALE = 0.035;
-const ROUGH_PATCH_STRENGTH = 0.05;
+const ROUGH_PATCH_STRENGTH = 0.08;
+// Sun-dried patches: the rough yellows in broad drifts, the fairway barely.
+const DRY_PATCH_SCALE = 0.014;
+const DRY_PATCH_START = 0.48;
+const DRY_PATCH_FULL = 0.85;
+/** Per-channel multiplier shift at a fully dry spot. */
+const DRY_SHIFT: RgbColor = { r: 0.24, g: 0.07, b: -0.22 };
+const FAIRWAY_DRY_SHARE = 0.3;
 
 const SAND_DAMP_EDGE = 0.1;
 /** The pond bed is painted as rough, darkened so it reads as depth through the water. */
@@ -111,17 +124,21 @@ const bunkerWallShade = (field: FieldModel, x: number, z: number): number => {
 };
 
 /**
- * Large-scale brightness variation layered over the flat surface colours:
- * mowing stripes on the fairway, soft patches in the rough, a shaded wall in
- * the bunkers. Returns a per-channel multiplier around 1.0.
+ * Large-scale colour variation layered over the surface colours: soft
+ * patches and dry drifts in the rough, a shaded wall in the bunkers.
+ * Returns a per-channel multiplier around 1.0.
  */
 const sampleTerrainTint = (field: FieldModel, weights: SurfaceWeights, x: number, z: number): RgbColor => {
   const broad = (valueNoise(x * BROAD_NOISE_SCALE, z * BROAD_NOISE_SCALE) - 0.5) * BROAD_NOISE_STRENGTH;
   const patch = (valueNoise(x * ROUGH_PATCH_SCALE + 7.3, z * ROUGH_PATCH_SCALE - 2.1) - 0.5) * ROUGH_PATCH_STRENGTH;
-  const stripe = Math.floor(z / FAIRWAY_STRIPE_WIDTH_M) % 2 === 0 ? 1 : -1;
+  const dry = smoothstep(
+    DRY_PATCH_START,
+    DRY_PATCH_FULL,
+    valueNoise(x * DRY_PATCH_SCALE + 3.1, z * DRY_PATCH_SCALE - 8.4),
+  );
 
   const rough = 1 + broad + patch * 2;
-  const fairway = 1 + stripe * FAIRWAY_STRIPE_CONTRAST + broad * 0.5;
+  const fairway = 1 + broad * 0.5;
   const green = 1 + broad * 0.25;
   const fringe = 1 + broad * 0.5;
 
@@ -136,7 +153,23 @@ const sampleTerrainTint = (field: FieldModel, weights: SurfaceWeights, x: number
     fringe * weights.fringe +
     bunker * weights.bunker +
     POND_BED_SHADE * weights.water;
-  return { r: value, g: value, b: value };
+  const dryness = dry * (weights.rough + FAIRWAY_DRY_SHARE * (weights.fairway + weights.tee));
+  return {
+    r: value * (1 + DRY_SHIFT.r * dryness),
+    g: value * (1 + DRY_SHIFT.g * dryness),
+    b: value * (1 + DRY_SHIFT.b * dryness),
+  };
+};
+
+/**
+ * Triangle wave across the mowing stripes, 0..1 over two stripes. Filtering
+ * keeps a linear ramp exact, so the shader can find the stripe edge at 0.5
+ * with sub-texel precision.
+ */
+const sampleStripeWave = (field: FieldModel, x: number, z: number): number => {
+  const stripes = (x - field.getCorridorCenterX(z)) / FAIRWAY_STRIPE_WIDTH_M;
+  const phase = stripes / 2 - Math.floor(stripes / 2);
+  return Math.abs(phase * 2 - 1);
 };
 
 const encodeTint = (value: number): number =>
@@ -146,7 +179,8 @@ const encodeWeight = (value: number): number => Math.round(clamp01(value) * 255)
 
 /**
  * One pass over the field producing both terrain lookups: the surface mask read
- * by TerrainStylePlugin and the tint map bound as the material's diffuse texture.
+ * by TerrainPbrPlugin, and the tint map (RGB tint, A mowing-stripe wave) bound
+ * as the material's albedo texture.
  * RawTexture keeps the mask exact; a canvas would premultiply the alpha channel.
  */
 const createTerrainLookupTextures = (
@@ -174,7 +208,7 @@ const createTerrainLookupTextures = (
       tintData[index] = encodeTint(tint.r);
       tintData[index + 1] = encodeTint(tint.g);
       tintData[index + 2] = encodeTint(tint.b);
-      tintData[index + 3] = 255;
+      tintData[index + 3] = encodeWeight(sampleStripeWave(field, x, z));
     }
   }
 
@@ -240,7 +274,9 @@ export const createFieldMaterials = (scene: Scene, field: FieldModel): FieldMate
   terrain.albedoTexture = lookups.tint;
   terrain.metallic = 0;
   terrain.roughness = TERRAIN_ROUGHNESS;
-  new TerrainStylePlugin(terrain).setStyle(
+  const terrainPlugin = new TerrainPbrPlugin(terrain);
+  terrainPlugin.setAntiTiling(QUALITY_PRESETS[DEFAULT_GRAPHICS_QUALITY].terrainAntiTiling);
+  terrainPlugin.setStyle(
     lookups.mask,
     {
       rough: toLinearColor3(PALETTE.surface.rough),
@@ -256,7 +292,14 @@ export const createFieldMaterials = (scene: Scene, field: FieldModel): FieldMate
       bunker: SURFACE_THRESHOLDS.bunker,
       fringe: SURFACE_THRESHOLDS.fringe,
     },
+    TERRAIN_SHADING,
   );
+  // The course is playable with flat colours; the photo detail fades in once loaded.
+  loadTerrainTextureArrays(scene)
+    .then((textures) => terrainPlugin.setTextures(textures))
+    .catch((error: unknown) => {
+      console.warn("Terrain textures failed to load; continuing with flat surfaces.", error);
+    });
 
   const backdrop = createPaintedMaterial(scene, "backdrop-material", PALETTE.surface.backdrop, TERRAIN_ROUGHNESS);
 
@@ -273,6 +316,7 @@ export const createFieldMaterials = (scene: Scene, field: FieldModel): FieldMate
 
   return {
     terrain,
+    terrainPlugin,
     backdrop,
     flag,
     pole: createPaintedMaterial(scene, "flag-pole-material", PALETTE.props.pole),

@@ -10,12 +10,14 @@ import { Color3, Color4 } from "@babylonjs/core";
  */
 export const PALETTE = {
   surface: {
-    rough: "#588d3b",
-    firstCut: "#659d40",
-    fairway: "#77b349",
-    fringe: "#72ad47",
-    green: "#84c458",
-    sand: "#efdaa2",
+    // Close to the mean colours of the grass and sand photos, nudged apart
+    // so each cut of grass reads as its own surface.
+    rough: "#56702f",
+    firstCut: "#5f7d33",
+    fairway: "#688b37",
+    fringe: "#698f39",
+    green: "#71993c",
+    sand: "#e2d3ad",
     backdrop: "#4f7d52",
     water: "#2e74b5",
     cartPath: "#aea283",

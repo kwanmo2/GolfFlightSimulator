@@ -1,5 +1,6 @@
 import { Color3, Vector3 } from "@babylonjs/core";
 import type { GraphicsQuality } from "../types/simulation";
+import type { TerrainShadingParams } from "./terrainPbrPlugin";
 
 /**
  * Lighting, environment and quality settings for the semi-realistic look.
@@ -75,10 +76,35 @@ export const ATMOSPHERE = {
 export const TONE = {
   exposure: 1,
   contrast: 1.12,
-  /** ColorCurves saturation, -100..100; small lift to offset ACES's desaturation. */
-  saturation: 12,
+  /** ColorCurves saturation, -100..100. */
+  saturation: 0,
   vignetteWeight: 1.2,
 } as const;
+
+/**
+ * Terrain shading (see TerrainPbrPlugin). Tile sizes are the real-world size
+ * of one photo, so grass blades come out at a believable scale.
+ */
+export const TERRAIN_SHADING: TerrainShadingParams = {
+  firstCutWeight: 0.16,
+  minEdgeSoftness: 0.012,
+  stripeContrast: 0.07,
+  greenCheckerWidthM: 2.4,
+  greenCheckerContrast: 0.05,
+  tileSizeM: { rough: 1.4, fairway: 1.1, green: 0.8, sand: 2.2 },
+  normalStrength: { rough: 1.1, fairway: 0.7, green: 0.45, sand: 0.6 },
+  detailContrast: { rough: 1.3, fairway: 1.1, green: 0.8, sand: 1.2 },
+  detailSaturation: 0.4,
+  mottleStrength: 0.09,
+  mottleScaleM: 4,
+  farBlendStartM: 25,
+  farBlendEndM: 90,
+  farTileMultiplier: 9,
+  rakeSpacingM: 0.09,
+  rakeStrength: 0.35,
+  rakeAngleRad: 0.6,
+  rakeFadeEndM: 45,
+};
 
 export interface QualityPreset {
   /** Cascaded shadows: sharp near the camera, still covering the whole hole. */
@@ -87,6 +113,8 @@ export interface QualityPreset {
   /** Cascades used when cascadedShadows is on. */
   shadowCascades: number;
   ssao: boolean;
+  /** Cross-fade that hides terrain texture repetition, at twice the texture fetches. */
+  terrainAntiTiling: boolean;
 }
 
 /**
@@ -99,12 +127,14 @@ export const QUALITY_PRESETS: Record<GraphicsQuality, QualityPreset> = {
     shadowMapSizePx: 1024,
     shadowCascades: 1,
     ssao: false,
+    terrainAntiTiling: false,
   },
   high: {
     cascadedShadows: true,
     shadowMapSizePx: 2048,
     shadowCascades: 3,
     ssao: true,
+    terrainAntiTiling: true,
   },
 };
 

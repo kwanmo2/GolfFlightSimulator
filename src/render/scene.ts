@@ -15,6 +15,7 @@ import {
   ATMOSPHERE,
   DEFAULT_GRAPHICS_QUALITY,
   ENVIRONMENT,
+  QUALITY_PRESETS,
   SUN_LIGHT,
   SUN_LIGHT_DIRECTION,
 } from "./renderConfig";
@@ -360,6 +361,7 @@ export const createSceneController = (canvas: HTMLCanvasElement): SceneControlle
     setGraphicsQuality(quality) {
       postProcessing.setQuality(quality);
       shadows.setQuality(quality);
+      materials.terrainPlugin.setAntiTiling(QUALITY_PRESETS[quality].terrainAntiTiling);
     },
     resize() {
       engine.resize();

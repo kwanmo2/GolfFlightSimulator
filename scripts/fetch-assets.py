@@ -8,12 +8,14 @@ Requires: python 3, ffmpeg and ffprobe on PATH (decode the HDRI).
 """
 from __future__ import annotations
 
+import io
 import math
 import struct
 import subprocess
 import sys
 import tempfile
 import urllib.request
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +37,23 @@ SUN_LUMINANCE_CAP = 12.0
 # Rows around the horizon averaged for the fog colour.
 HORIZON_BAND = (0.47, 0.5)
 
+# ambientCG materials for the terrain, one per texture layer. The renderer
+# colours each surface itself, so the albedo map is turned into a "detail"
+# map: linear colour divided by its own mean and scaled to 0.5, i.e. only the
+# variation around the average survives (see normalise_detail).
+TERRAIN_TEXTURES = {
+    # layer: ambientCG asset id
+    "rough": "Grass004",
+    "fairway": "Grass005",
+    "green": "Grass008",
+    "sand": "Ground101",
+}
+TERRAIN_TEXTURE_SIZE = 1024
+TERRAIN_OUT = PUBLIC / "textures" / "terrain"
+# Mean of a normalised detail map, as a byte. The shader multiplies by 2.
+DETAIL_MEAN = 0.5
+JPEG_QUALITY = "3"
+
 
 
 def download(url: str, destination: Path) -> None:
@@ -43,6 +62,75 @@ def download(url: str, destination: Path) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request) as response:
         destination.write_bytes(response.read())
+
+
+def download_bytes(url: str) -> bytes:
+    print(f"downloading {url}")
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request) as response:
+        return response.read()
+
+
+def srgb_to_linear(value: float) -> float:
+    return value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+
+
+def decode_rgb(image: bytes, size: int) -> bytes:
+    return subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-i", "pipe:0",
+            "-vf", f"scale={size}:{size}:flags=lanczos",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+        ],
+        input=image,
+        check=True,
+        capture_output=True,
+    ).stdout
+
+
+def encode_jpeg(rgb: bytes, size: int, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-y",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{size}x{size}", "-i", "pipe:0",
+            "-q:v", JPEG_QUALITY, str(destination),
+        ],
+        input=rgb,
+        check=True,
+    )
+
+
+def normalise_detail(rgb: bytes) -> bytes:
+    """
+    Linear colour divided by its per-channel mean and scaled to DETAIL_MEAN,
+    stored as linear bytes. Brightness and hue variation are kept; the
+    average colour is left to the renderer's surface colours.
+    """
+    to_linear = [srgb_to_linear(index / 255) for index in range(256)]
+    pixel_count = len(rgb) // 3
+    means = [sum(to_linear[value] for value in rgb[channel::3]) / pixel_count for channel in range(3)]
+    tables = [
+        bytes(min(255, round(to_linear[value] / means[channel] * DETAIL_MEAN * 255)) for value in range(256))
+        for channel in range(3)
+    ]
+    out = bytearray(len(rgb))
+    for channel in range(3):
+        out[channel::3] = rgb[channel::3].translate(tables[channel])
+    print("  mean linear colour " + ", ".join(f"{mean:.4f}" for mean in means))
+    return bytes(out)
+
+
+def fetch_terrain_textures() -> None:
+    size = TERRAIN_TEXTURE_SIZE
+    for layer, asset_id in TERRAIN_TEXTURES.items():
+        archive = zipfile.ZipFile(io.BytesIO(download_bytes(f"https://ambientcg.com/get?file={asset_id}_1K-JPG.zip")))
+        maps = {name.rsplit("_", 1)[-1]: name for name in archive.namelist()}
+        print(f"{layer}: {asset_id}")
+        detail = normalise_detail(decode_rgb(archive.read(maps["Color.jpg"]), size))
+        encode_jpeg(detail, size, TERRAIN_OUT / f"{layer}_detail.jpg")
+        normal = decode_rgb(archive.read(maps["NormalGL.jpg"]), size)
+        encode_jpeg(normal, size, TERRAIN_OUT / f"{layer}_normal.jpg")
 
 
 def fetch_hdri(destination: Path) -> None:
@@ -181,6 +269,7 @@ def write_panorama(panorama: Panorama, destination: Path) -> None:
 
 
 def main() -> int:
+    fetch_terrain_textures()
     with tempfile.TemporaryDirectory() as scratch:
         source = Path(scratch) / "source.hdr"
         fetch_hdri(source)
