@@ -30,6 +30,12 @@ const DEPTH_MAP_SIZE_PX = 256;
 const DEPTH_MAP_RANGE_M = 1.5;
 /** Planar reflection resolution on the "high" preset. */
 const MIRROR_SIZE_PX = 512;
+/**
+ * The reflection is redrawn every second frame: ripples hide the one-frame
+ * lag, and a full redraw of the reflected scene cost ~2.5 ms per frame on an
+ * integrated GPU.
+ */
+const MIRROR_REFRESH_FRAMES = 2;
 
 const DEPTH_SAMPLER = "pondDepthSampler";
 const UNIFORMS = ["pondArea", "pondShallow", "pondDeep", "pondWave", "pondShore"];
@@ -249,6 +255,7 @@ export const createPondWater = (
   // Reflect about the water surface; Babylon planes are n.p + d = 0 with n pointing away from the reflected side.
   mirror.mirrorPlane = new Plane(0, -1, 0, field.waterLevelY);
   mirror.level = WATER.mirrorLevel;
+  mirror.refreshRate = MIRROR_REFRESH_FRAMES;
   const skybox = scene.getMeshByName("sky-box");
   mirror.renderList = skybox ? [skybox] : [];
 

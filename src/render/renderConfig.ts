@@ -136,17 +136,17 @@ export const WIND = {
 } as const;
 
 export interface QualityPreset {
-  /** Cascaded shadows: sharp near the camera, still covering the whole hole. */
-  cascadedShadows: boolean;
+  /**
+   * Size of the static sun shadow map. It is drawn once, so a larger map
+   * costs memory and a little sampling, not a per-frame render.
+   */
   shadowMapSizePx: number;
-  /** Cascades used when cascadedShadows is on. */
-  shadowCascades: number;
   ssao: boolean;
   /**
-   * Multisampling of the HDR scene target. It is the single most expensive
-   * pass on an integrated GPU (around 6 ms at 1600 x 900 on a Radeon 780M,
-   * at 2 samples as much as at 4), and it does nothing for alpha-tested
-   * foliage, so presets without it use FXAA instead.
+   * Multisampling of the HDR scene target; 1 uses FXAA instead. MSAA is the
+   * single most expensive pass on an integrated GPU (around 5 ms at
+   * 1600 x 900 on a Radeon 780M, as much at 2 samples as at 4), and it does
+   * nothing for alpha-tested foliage.
    */
   msaaSamples: number;
   /** Bloom only catches the sun's glare on water and the ball's highlight. */
@@ -161,13 +161,13 @@ export interface QualityPreset {
 
 /**
  * Every per-quality setting in one table. "standard" targets 60 fps on an
- * integrated laptop GPU; "high" assumes a discrete GPU.
+ * integrated laptop GPU with margin to spare; "high" adds SSAO, bloom,
+ * terrain anti-tiling, the pond reflection and full grass, and also aims for
+ * 60 fps there.
  */
 export const QUALITY_PRESETS: Record<GraphicsQuality, QualityPreset> = {
   standard: {
-    cascadedShadows: false,
-    shadowMapSizePx: 1024,
-    shadowCascades: 1,
+    shadowMapSizePx: 2048,
     ssao: false,
     msaaSamples: 1,
     bloom: false,
@@ -176,12 +176,9 @@ export const QUALITY_PRESETS: Record<GraphicsQuality, QualityPreset> = {
     grassDensity: 0.55,
   },
   high: {
-    cascadedShadows: true,
-    shadowMapSizePx: 2048,
-    // Two cascades: a third cost ~3 ms of tree depth passes for a sharper midground.
-    shadowCascades: 2,
+    shadowMapSizePx: 4096,
     ssao: true,
-    msaaSamples: 4,
+    msaaSamples: 1,
     bloom: true,
     terrainAntiTiling: true,
     waterReflection: true,

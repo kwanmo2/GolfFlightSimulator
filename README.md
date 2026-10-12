@@ -182,7 +182,7 @@ The scene aims for a semi-realistic, broadcast-style look built from CC0 photogr
 - `src/render/windPlugin.ts`
   vertex sway and flutter shared by trees, bushes, and grass
 - `src/render/shadows.ts`
-  sun shadows: cascaded on High, a single map on Standard
+  static sun shadows from the trees, drawn once into a single map
 - `src/render/courseDetails.ts`
   the cart path draped over the terrain
 - `src/render/props.ts`
@@ -268,21 +268,21 @@ The panel's Graphics select switches between two presets defined in `QUALITY_PRE
 
 | Setting | Standard | High |
 |---|---|---|
-| Target | 60 fps on an integrated laptop GPU | a discrete GPU |
-| Anti-aliasing | FXAA | 4x MSAA |
+| Anti-aliasing | FXAA | FXAA |
 | Bloom | off | on |
-| Shadows | one 1024 px map | two 2048 px cascades |
+| Static shadow map | 2048 px | 4096 px |
 | SSAO | off | on |
 | Terrain anti-tiling | off | on |
-| Pond reflection | sky only | planar reflection of trees and banks |
+| Pond reflection | sky only | planar reflection of trees and banks, redrawn every second frame |
 | Rough grass density | 55% | 100% |
 
-On an AMD Radeon 780M (integrated) at 1600 x 900, Standard renders a frame in about 9 to 13 ms. High takes about 20 to 27 ms there, so it is meant for a discrete GPU. On that GPU the most expensive passes are MSAA (about 6 ms), cascaded shadow re-rendering, the pond reflection, SSAO, and bloom. The trees themselves cost about 1 ms.
+Both presets hold 60 fps on an integrated laptop GPU. On an AMD Radeon 780M at 1600 x 900, a frame takes about 6 to 8 ms on Standard and 8 to 13 ms on High. Before these settings, the most expensive passes there were 4x MSAA (about 5 ms) and re-rendering cascaded shadows every frame (about 3 ms). The trees themselves cost about 1 ms. `msaaSamples` in the preset table can turn MSAA back on for a discrete GPU.
 
 Other choices that keep the frame cheap:
 
 - terrain uses one procedural mesh with a non-uniform grid: sub-metre triangles around the tee and green complex, coarse triangles in the outskirts
 - each tree variant is one merged mesh; corridor trees are instances with a per-copy tint, and only trees near the hole cast shadows
+- trees and sun never move, so the shadow map is drawn once and reused; the ball draws its own contact shadow instead of casting into it
 - the far forest is a few hundred impostor quads drawn as thin instances (one draw call per tree variant); it grows only on the modelled terrain, just deep enough to close the horizon
 - rough grass is thin instances of one crossed-card clump; Standard draws a random subset of them
 - the live readouts in the panel update ten times a second, not every frame
@@ -300,5 +300,4 @@ The current largest browser cost is still the Babylon bundle size. Vite build pa
 - The ground is a height field: no overhangs, and a ball on the ground stays glued to it rather than going airborne over a sharp crest.
 - Ground contact uses the analytic height function; the rendered mesh interpolates it between vertices, so the two can differ by a few centimetres on steep features.
 - Trees are procedural approximations built from photo cards, not scanned models. Impostors show eight fixed views, so a far tree can visibly switch views as the camera orbits.
-- Shadow maps are rendered without wind sway, and grass and impostors cast no shadows.
-- The High preset does not hold 60 fps on integrated GPUs.
+- Shadows are static: they don't sway with the wind, and grass and impostors cast none. The ball casts no sun shadow; a contact shadow sits directly under it.

@@ -298,8 +298,8 @@ export const createSceneController = (canvas: HTMLCanvasElement): SceneControlle
       rigs[cameraName].camera.attachControl(canvas, false);
     },
     attachFollowTarget(target) {
+      // The ball casts no sun shadow (the shadow map is static); it draws its own contact shadow.
       rigs.chase.camera.target.copyFrom(target.position);
-      shadows.addShadowCaster(target);
     },
     updateReplayCamera(frame, metrics) {
       // Only the active camera receives input, so it is the only rig whose pose

@@ -192,10 +192,13 @@ Rules for scenery:
 - Graphics presets live in `QUALITY_PRESETS` (`src/render/renderConfig.ts`).
 - "standard" must hold 60 fps (under 16.7 ms per frame) on an integrated
   laptop GPU (reference: AMD Radeon 780M at 1600 x 900).
-- "high" may assume a discrete GPU.
-- Measure before optimizing. On integrated GPUs the expensive passes are MSAA,
-  cascaded shadow re-rendering, the planar water reflection, SSAO, and bloom.
-  Vegetation geometry is cheap.
+- "high" should also hold 60 fps there; it currently runs at about 8 to 13 ms.
+- Measure before optimizing. On integrated GPUs the expensive passes are MSAA
+  (now off: FXAA instead), per-frame shadow map rendering (now drawn once,
+  since all casters are static), the planar water reflection (half rate),
+  SSAO, and bloom. Vegetation geometry is cheap.
+- Shadow casters must be static. Moving objects draw their own contact
+  shadow, as the ball does.
 - New expensive effects need a preset flag, and must be off on "standard"
   unless they fit the budget.
 - Don't touch the DOM every frame; the live readouts are throttled.

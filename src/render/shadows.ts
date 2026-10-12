@@ -1,4 +1,4 @@
-import { CascadedShadowGenerator, ShadowGenerator } from "@babylonjs/core";
+import { RenderTargetTexture, ShadowGenerator } from "@babylonjs/core";
 import type { AbstractMesh, DirectionalLight } from "@babylonjs/core";
 import type { GraphicsQuality } from "../types/simulation";
 import { QUALITY_PRESETS } from "./renderConfig";
@@ -8,45 +8,33 @@ const SHADOW_NORMAL_BIAS = 0.02;
 /** Fraction of direct light left inside shadows; sky light fills the rest. */
 const SHADOW_DARKNESS = 0.15;
 
-// Cascades cover the hole out past the green; beyond that the trees are far
-// enough away that missing shadows go unnoticed.
-const CASCADE_MAX_Z_M = 420;
-/** Blend toward logarithmic splits: more resolution near the camera. */
-const CASCADE_LAMBDA = 0.85;
-const CASCADE_BLEND = 0.08;
-
 export interface ShadowSystem {
+  /** Register a mesh that never moves. The shadow map is redrawn on the next frame. */
   addShadowCaster(mesh: AbstractMesh): void;
   setQuality(quality: GraphicsQuality): void;
 }
 
 const createGenerator = (sun: DirectionalLight, quality: GraphicsQuality): ShadowGenerator => {
-  const preset = QUALITY_PRESETS[quality];
-  let generator: ShadowGenerator;
-  if (preset.cascadedShadows && CascadedShadowGenerator.IsSupported) {
-    const cascaded = new CascadedShadowGenerator(preset.shadowMapSizePx, sun);
-    cascaded.numCascades = preset.shadowCascades;
-    cascaded.shadowMaxZ = CASCADE_MAX_Z_M;
-    cascaded.lambda = CASCADE_LAMBDA;
-    cascaded.cascadeBlendPercentage = CASCADE_BLEND;
-    cascaded.stabilizeCascades = true;
-    cascaded.depthClamp = true;
-    generator = cascaded;
-  } else {
-    generator = new ShadowGenerator(preset.shadowMapSizePx, sun);
-  }
+  const generator = new ShadowGenerator(QUALITY_PRESETS[quality].shadowMapSizePx, sun);
   generator.usePercentageCloserFiltering = true;
   generator.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
   generator.bias = SHADOW_BIAS;
   generator.normalBias = SHADOW_NORMAL_BIAS;
   generator.setDarkness(SHADOW_DARKNESS);
+  // Everything that casts is static and the sun does not move, so the map is
+  // drawn once and reused. Re-rendering it every frame (cascades follow the
+  // camera) cost ~3 ms on an integrated GPU for no visible change.
+  generator.getShadowMap()!.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
   return generator;
 };
 
 /**
- * Sun shadows that can be rebuilt for a new quality preset. Casters are
- * remembered so a rebuilt generator picks them all up again; receivers keep
- * their own receiveShadows flag and need nothing.
+ * Static sun shadows from the trees, drawn once into a single map that the
+ * light fits around all casters. The ball is not a caster (its shadow map
+ * would freeze at the tee); ballRenderer.ts draws its own contact shadow.
+ *
+ * Casters are remembered so a generator rebuilt for a new quality preset picks
+ * them all up again; receivers keep their own receiveShadows flag.
  */
 export const createShadowSystem = (
   sun: DirectionalLight,
@@ -60,6 +48,7 @@ export const createShadowSystem = (
     addShadowCaster(mesh) {
       casters.push(mesh);
       generator.addShadowCaster(mesh, false);
+      generator.getShadowMap()!.resetRefreshCounter();
     },
     setQuality(nextQuality) {
       if (nextQuality === quality) {
