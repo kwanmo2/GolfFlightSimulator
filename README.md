@@ -10,10 +10,12 @@ Babylon.js + TypeScript + Vite demo for visualizing launch-monitor-style golf sh
 
 - Browser-based 3D hole with real relief (driving-zone dip, raised green plateau, valley sides, rough mounds, raised tee box), irregular bunkers, a pond, a cart path, tree lines, flag, tee markers, and distance markers
 - Terrain-aware physics: the ball lands, bounces off slopes, and rolls downhill on the same terrain that is drawn
-- Stylized "soft flat" look: every surface is a flat colour from one palette (`src/render/palette.ts`), shaped by lighting, soft shadows, and ambient occlusion
-- Palette-painted terrain with crisp, antialiased edges that sit exactly on the physics surface boundaries, a first-cut collar, fairway mowing stripes, and a checkered green
-- Low-poly CC0 trees, bushes, grass clumps, and wildflowers from the Kenney Nature Kit, recoloured from the palette
-- Post-processing with MSAA, restrained bloom, Khronos PBR Neutral tone mapping, and SSAO (switchable in the panel), plus a gradient sky with low-poly clouds and backdrop hills
+- Semi-realistic look: an HDRI sky that also lights every PBR material, a matching shadow-casting sun, and distance haze
+- PBR terrain textured with CC0 photo detail and normal maps, with no visible tiling, mowing stripes, a checkered green, and raked bunkers; surface edges sit exactly on the physics surface boundaries
+- A pond with depth-tinted water, shore foam, ripples, and (on High) a planar reflection
+- Trees generated in code from CC0 leaf, needle, and bark photos, with wind sway, crossed-card grass clumps in the rough, and a far forest drawn as baked impostors
+- Two graphics presets, Standard and High, set in one table in `src/render/renderConfig.ts`
+- Post-processing with MSAA or FXAA, restrained bloom, ACES tone mapping, and SSAO
 - Structured JSON shot input with centralized unit normalization to SI units
 - Custom fixed-timestep ballistics with gravity, drag, Magnus-style lift and curve, spin decay, bounce, skid, and roll
 - Calibration profiles for `driver`, `long_iron`, `short_iron`, `wedge`, and `putt_like`
@@ -157,30 +159,53 @@ This keeps rollout differences simple but visible. The same launch landing on fa
 
 ## Render Style
 
-The scene uses a stylized "soft flat" look: flat palette colours, soft shadows, and ambient occlusion, with no photographic textures. The rendering is split into modules:
+The scene aims for a semi-realistic, broadcast-style look built from CC0 photographic assets. The rendering is split into modules:
 
+- `src/render/renderConfig.ts`
+  sun, sky, haze, tone, terrain shading, water, and wind settings, plus the `QUALITY_PRESETS` table that holds every per-quality setting
 - `src/render/palette.ts`
-  every scene colour as a named sRGB constant: surfaces, vegetation, sky, light, props, ball, and trajectory
+  painted base colours for course surfaces, props, and overlays (sRGB, with helpers for linear PBR use)
+- `src/render/sky.ts`
+  the HDRI panorama, used as both the visible sky and image-based lighting, rotated so its sun matches the directional light
 - `src/render/terrain.ts`
   procedural hole layout, rolling height field, soft surface weights, and the surface classification thresholds shared with the physics
-- `src/render/materials.ts` and `src/render/terrainStylePlugin.ts`
-  a baked surface mask and tint map, painted in palette colours by a material plugin; each surface edge is drawn at the same weight the physics uses to classify it, so what the ball lands on matches what is shown
-- `src/render/sky.ts`
-  gradient sky dome with sun glow and a ring of low-poly clouds
-- `src/render/assetLibrary.ts` and `src/render/vegetation.ts`
-  glTF model loading (geometry only, recoloured with palette vertex colours) and placement of trees, bushes, grass, and flowers
+- `src/render/materials.ts`, `src/render/terrainPbrPlugin.ts`, and `src/render/terrainTextures.ts`
+  a baked surface mask and tint map, plus a PBR material plugin that blends photo detail and normal texture arrays per surface; each surface edge is drawn at the same weight the physics uses to classify it
+- `src/render/water.ts`
+  the pond surface: depth tint, shore foam, ripples, and the planar reflection
+- `src/render/treeGenerator.ts` and `src/render/foliageTextures.ts`
+  seeded procedural trees (broadleaf, conifer, bush): bark tubes and alpha-tested leaf-cluster cards composed from the photo atlases
+- `src/render/vegetation.ts`
+  placement of corridor trees, bushes, rough grass, and the far forest; trees are kept off the pond, the cart path, and anything beyond the modelled terrain
+- `src/render/impostor.ts`
+  bakes each tree from eight directions into an atlas and draws distant copies as camera-facing quads
+- `src/render/windPlugin.ts`
+  vertex sway and flutter shared by trees, bushes, and grass
+- `src/render/shadows.ts`
+  sun shadows: cascaded on High, a single map on Standard
 - `src/render/courseDetails.ts`
-  the pond's water surface and the cart path draped over the terrain
+  the cart path draped over the terrain
 - `src/render/props.ts`
   flag, cup, tee markers, distance markers, and backdrop hills
 - `src/render/postProcess.ts`
-  MSAA, bloom, tone mapping, colour grading, and SSAO
+  anti-aliasing, bloom, tone mapping, colour grading, and SSAO
 - `src/render/scene.ts`
-  scene orchestration, lighting, fog, shadows, cameras, and terrain-to-physics surface lookup
+  scene orchestration, lighting, fog, cameras, and terrain-to-physics surface lookup
 
-Vegetation loads asynchronously: the course renders immediately and the trees appear once their models arrive. If the models fail to load, the scene logs a warning and stays fully usable without them.
+Vegetation loads asynchronously: the course renders immediately, the trees and grass appear once their textures are composed, and the far forest appears once its impostors are baked. If loading fails, the scene logs a warning and stays fully usable without them.
 
-The ball uses a bright material with a fresnel rim and dimple normal detail so it stays readable against both sky and grass.
+The ball uses a white clear-coated material with dimple normal detail and a little emission, so it stays readable against both sky and grass.
+
+### Assets
+
+Every third-party file in `public/` is CC0 (Poly Haven and ambientCG) and is listed with its source and processing in `public/LICENSE.md`. The processed files are committed. To refresh them, run:
+
+```bash
+python scripts/fetch-assets.py            # everything
+python scripts/fetch-assets.py vegetation # only foliage and bark textures
+```
+
+The script needs Python 3, and `ffmpeg` / `ffprobe` on `PATH` to decode the HDRI.
 
 ## Analysis UX
 
@@ -213,15 +238,22 @@ The current shot is highlighted in warm colors. Comparison overlays render in a 
 - `src/core/ballistics.ts`: deterministic fixed-timestep flight simulation
 - `src/core/collision.ts`: bounce, skid, roll, and surface friction
 - `src/core/physicsConfig.ts`: centralized tunable constants
-- `src/render/palette.ts`: all scene colours
-- `src/render/ballRenderer.ts`: ball mesh, rim-lit material, and shadow disc
+- `src/render/renderConfig.ts`: lighting, environment, shading constants, and graphics quality presets
+- `src/render/palette.ts`: painted surface, prop, and overlay colours
+- `src/render/ballRenderer.ts`: ball mesh, clear-coat material, and shadow disc
 - `src/render/terrain.ts`: procedural hole terrain (non-uniform grid, bunker bowls, green contour), surface lookup, and classification thresholds
 - `src/render/materials.ts`: terrain surface mask and tint maps, and prop materials
-- `src/render/terrainStylePlugin.ts`: material plugin that paints the terrain surfaces in palette colours
-- `src/render/sky.ts`: sky dome and clouds
-- `src/render/assetLibrary.ts`: glTF model loading and palette recolouring
-- `src/render/vegetation.ts`: tree, bush, grass, and flower placement
-- `src/render/courseDetails.ts`: pond water and cart path
+- `src/render/terrainPbrPlugin.ts`: PBR material plugin that paints and textures the terrain surfaces
+- `src/render/terrainTextures.ts`: terrain detail and normal texture arrays
+- `src/render/sky.ts`: HDRI sky and image-based lighting
+- `src/render/shadows.ts`: sun shadow generator per quality preset
+- `src/render/water.ts`: pond water surface and reflection
+- `src/render/treeGenerator.ts`: procedural tree, conifer, and bush meshes
+- `src/render/foliageTextures.ts`: leaf-cluster, needle, grass, and bark textures
+- `src/render/vegetation.ts`: tree, bush, grass, and forest placement
+- `src/render/impostor.ts`: impostor baking and billboard material for the far forest
+- `src/render/windPlugin.ts`: wind sway material plugin
+- `src/render/courseDetails.ts`: cart path
 - `src/render/props.ts`: pin, tee and distance markers, and backdrop hills
 - `src/render/postProcess.ts`: post-processing pipeline and graphics quality switch
 - `src/render/proceduralNoise.ts`: shared deterministic hash and noise helpers
@@ -232,16 +264,29 @@ The current shot is highlighted in warm colors. Comparison overlays render in a 
 
 ## Performance Controls
 
-The rendering path stays browser-friendly by design:
+The panel's Graphics select switches between two presets defined in `QUALITY_PRESETS` (`src/render/renderConfig.ts`):
+
+| Setting | Standard | High |
+|---|---|---|
+| Target | 60 fps on an integrated laptop GPU | a discrete GPU |
+| Anti-aliasing | FXAA | 4x MSAA |
+| Bloom | off | on |
+| Shadows | one 1024 px map | two 2048 px cascades |
+| SSAO | off | on |
+| Terrain anti-tiling | off | on |
+| Pond reflection | sky only | planar reflection of trees and banks |
+| Rough grass density | 55% | 100% |
+
+On an AMD Radeon 780M (integrated) at 1600 x 900, Standard renders a frame in about 9 to 13 ms. High takes about 20 to 27 ms there, so it is meant for a discrete GPU. On that GPU the most expensive passes are MSAA (about 6 ms), cascaded shadow re-rendering, the pond reflection, SSAO, and bloom. The trees themselves cost about 1 ms.
+
+Other choices that keep the frame cheap:
 
 - terrain uses one procedural mesh with a non-uniform grid: sub-metre triangles around the tee and green complex, coarse triangles in the outskirts
-- the terrain is painted from two baked lookup textures in a single StandardMaterial pass (see `src/render/terrainStylePlugin.ts`), so shadows, fog, and tone mapping stay on Babylon's built-in path; no tiled textures are loaded
-- each vegetation model is merged into one mesh; trees and bushes render as instances with a per-copy tint, and only trees near the hole cast shadows
-- grass clumps and flowers are thin instances: one draw call per model
-- SSAO is the one expensive pass; the panel's Graphics select switches between "High (AO)" and "Standard" (no AO)
+- each tree variant is one merged mesh; corridor trees are instances with a per-copy tint, and only trees near the hole cast shadows
+- the far forest is a few hundred impostor quads drawn as thin instances (one draw call per tree variant); it grows only on the modelled terrain, just deep enough to close the horizon
+- rough grass is thin instances of one crossed-card clump; Standard draws a random subset of them
+- the live readouts in the panel update ten times a second, not every frame
 - the physics samples the terrain height function directly (a few lookups per step), not the rendered mesh, so ground contact costs no mesh queries
-
-Model assets live in `public/models/` and are CC0 from the Kenney Nature Kit (see `public/models/LICENSE.md`).
 
 The current largest browser cost is still the Babylon bundle size. Vite build passes, but the final chunk is large and can be code-split later if needed.
 
@@ -254,3 +299,6 @@ The current largest browser cost is still the Babylon bundle size. Vite build pa
 - The field is a single procedural hole demo, not a reusable course editor.
 - The ground is a height field: no overhangs, and a ball on the ground stays glued to it rather than going airborne over a sharp crest.
 - Ground contact uses the analytic height function; the rendered mesh interpolates it between vertices, so the two can differ by a few centimetres on steep features.
+- Trees are procedural approximations built from photo cards, not scanned models. Impostors show eight fixed views, so a far tree can visibly switch views as the camera orbits.
+- Shadow maps are rendered without wind sway, and grass and impostors cast no shadows.
+- The High preset does not hold 60 fps on integrated GPUs.

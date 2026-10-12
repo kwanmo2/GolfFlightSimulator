@@ -112,7 +112,20 @@ Structure the code into clear modules:
   - landing, bounce, roll
 
 - `src/render/scene.ts`
-  - Babylon scene setup
+  - Babylon scene setup, lighting, fog, cameras
+
+- `src/render/renderConfig.ts`
+  - sun, sky, haze, tone, terrain, water, and wind constants
+  - `QUALITY_PRESETS`: every per-quality setting in one table
+
+- `src/render/terrain.ts`, `materials.ts`, `terrainPbrPlugin.ts`, `terrainTextures.ts`
+  - height field, surface classification shared with physics, PBR terrain shading
+
+- `src/render/sky.ts`, `shadows.ts`, `postProcess.ts`, `water.ts`
+  - HDRI sky and image-based lighting, sun shadows, post stack, pond
+
+- `src/render/vegetation.ts`, `treeGenerator.ts`, `foliageTextures.ts`, `impostor.ts`, `windPlugin.ts`
+  - procedural trees from photo textures, placement, far-forest impostors, wind sway
 
 - `src/render/ballRenderer.ts`
   - ball mesh and visual updates
@@ -153,6 +166,39 @@ The scene should look clean and readable:
 - visible trajectory line
 
 The ball must remain visually trackable during flight.
+
+The current look is semi-realistic (broadcast golf style): HDRI sky with
+image-based lighting, PBR materials, photo-textured terrain without visible
+tiling, procedural trees built from photo leaf cards.
+
+Rules for scenery:
+- Vegetation and props stay on the modelled terrain (`terrainWidthM` x
+  `terrainLengthM`, centred on the origin). Nothing grows over the backdrop.
+- Keep trees off the pond, the cart path, and the playing corridor.
+- Distant trees are impostors, not full geometry. Don't add scenery that is
+  only visible from far away; the backdrop hills close the horizon.
+- Vegetation loads asynchronously; a failed load must leave a usable course.
+
+## Assets
+- Third-party assets must be CC0 (Poly Haven, ambientCG, or similar).
+- `scripts/fetch-assets.py` downloads and processes them into `public/`;
+  the processed files are committed.
+- Record every asset with its source, licence, and processing in
+  `public/LICENSE.md`.
+- Keep each asset to a few MB. Poly Haven tree glTFs (25–215 MB each) were
+  rejected for this reason.
+
+## Performance Budget
+- Graphics presets live in `QUALITY_PRESETS` (`src/render/renderConfig.ts`).
+- "standard" must hold 60 fps (under 16.7 ms per frame) on an integrated
+  laptop GPU (reference: AMD Radeon 780M at 1600 x 900).
+- "high" may assume a discrete GPU.
+- Measure before optimizing. On integrated GPUs the expensive passes are MSAA,
+  cascaded shadow re-rendering, the planar water reflection, SSAO, and bloom.
+  Vegetation geometry is cheap.
+- New expensive effects need a preset flag, and must be off on "standard"
+  unless they fit the budget.
+- Don't touch the DOM every frame; the live readouts are throttled.
 
 ## UX Requirements
 Include:
