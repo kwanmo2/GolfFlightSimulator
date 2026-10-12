@@ -72,13 +72,19 @@ const GRASS_CARD_COUNT = 3;
 const GRASS_ROOT_SHADE = 0.55;
 
 // The far forest: a jittered grid beyond the corridor trees, thinned by noise
-// into stands and clearings, drawn entirely as impostors.
+// into stands and clearings, drawn entirely as impostors. It only needs to be
+// deep enough to close the horizon from the replay cameras; past that the
+// backdrop hills take over, so its outer edge thins out instead of ending.
 const FOREST_SPACING_M = 8;
 /** Lateral distance from the corridor centre where the forest begins. */
 const FOREST_INNER_M = 112;
-const FOREST_OUTER_X_M = 320;
-const FOREST_START_Z_M = -140;
-const FOREST_END_Z_M = 450;
+const FOREST_OUTER_X_M = 210;
+const FOREST_START_Z_M = -95;
+const FOREST_END_Z_M = 400;
+/** Gap kept between the forest and the terrain mesh's edge, so no crown hangs over the void. */
+const FOREST_TERRAIN_MARGIN_M = 10;
+/** Width of the band along the outer edges where the forest thins to nothing. */
+const FOREST_EDGE_FADE_M = 45;
 /** The forest closes in behind the green from here... */
 const FOREST_BACK_Z_M = 328;
 /** ...and behind the tee from here back. */
@@ -260,10 +266,14 @@ const grassPlacements = (field: FieldModel): Placement[] => {
  */
 const forestPlacements = (field: FieldModel): Placement[] => {
   const placements: Placement[] = [];
+  // Trees grow only on the modelled terrain, which is centred on the origin.
+  const outerX = Math.min(FOREST_OUTER_X_M, field.terrainWidthM / 2 - FOREST_TERRAIN_MARGIN_M);
+  const startZ = Math.max(FOREST_START_Z_M, -field.terrainLengthM / 2 + FOREST_TERRAIN_MARGIN_M);
+  const endZ = Math.min(FOREST_END_Z_M, field.terrainLengthM / 2 - FOREST_TERRAIN_MARGIN_M);
   let seed = 5000;
-  for (let z = FOREST_START_Z_M; z < FOREST_END_Z_M; z += FOREST_SPACING_M) {
+  for (let z = startZ; z < endZ; z += FOREST_SPACING_M) {
     const center = field.getCorridorCenterX(Math.min(Math.max(z, 0), field.holeLengthM));
-    for (let x = -FOREST_OUTER_X_M; x < FOREST_OUTER_X_M; x += FOREST_SPACING_M) {
+    for (let x = -outerX; x < outerX; x += FOREST_SPACING_M) {
       seed += 1;
       const px = x + (hash(seed * 1.31) - 0.5) * FOREST_SPACING_M * 0.9;
       const pz = z + (hash(seed * 2.17) - 0.5) * FOREST_SPACING_M * 0.9;
@@ -271,8 +281,11 @@ const forestPlacements = (field: FieldModel): Placement[] => {
       if (!inBand) {
         continue;
       }
+      const edgeDistance = Math.min(outerX - Math.abs(px), pz - startZ, endZ - pz);
+      const edgeFade = smoothstep(0, FOREST_EDGE_FADE_M, edgeDistance);
       const stand = valueNoise(px * FOREST_STAND_SCALE + 11.3, pz * FOREST_STAND_SCALE - 4.7);
-      if (stand < FOREST_STAND_THRESHOLD || hash(seed * 3.7) > smoothstep(FOREST_STAND_THRESHOLD, 0.6, stand) + 0.15) {
+      const density = (smoothstep(FOREST_STAND_THRESHOLD, 0.6, stand) + 0.15) * edgeFade;
+      if (stand < FOREST_STAND_THRESHOLD || hash(seed * 3.7) > density) {
         continue;
       }
       placements.push({ x: px, z: pz, scale: 0.8 + hash(seed * 4.9) * 0.5 });

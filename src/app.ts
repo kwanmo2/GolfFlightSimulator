@@ -19,6 +19,13 @@ import type {
   TrajectoryDisplayMode,
 } from "./types/simulation";
 
+/**
+ * How often the live readouts are rewritten during playback. Every DOM write
+ * restyles the panel, and doing that on every rendered frame shows up as
+ * dropped frames on integrated GPUs.
+ */
+const STATS_INTERVAL_MS = 100;
+
 interface EnvironmentOverrides {
   windSpeed: number;
   windDirection: number;
@@ -41,6 +48,7 @@ export class GolfFlightApp {
   private previousSimulation: SimulationResult | null = null;
   private baselineSimulation: SimulationResult | null = null;
   private playbackTimeS = 0;
+  private lastStatsUpdateMs = Number.NEGATIVE_INFINITY;
   private paused = false;
   private cameraMode: ReplayCameraMode = "broadcast";
   private trajectoryMode: TrajectoryDisplayMode = "full";
@@ -275,7 +283,8 @@ export class GolfFlightApp {
     return this.simulation.frames[index];
   }
 
-  private renderCurrentFrame(): void {
+  /** `throttleStats` is for the per-frame tick; explicit refreshes always update the readouts. */
+  private renderCurrentFrame(throttleStats = false): void {
     if (!this.simulation) {
       return;
     }
@@ -288,6 +297,11 @@ export class GolfFlightApp {
     this.ballRenderer.update(frame);
     this.trajectoryRenderer.highlightFrame(frame.position);
     this.sceneController.updateReplayCamera(frame, this.simulation.metrics);
+    const nowMs = performance.now();
+    if (throttleStats && nowMs - this.lastStatsUpdateMs < STATS_INTERVAL_MS) {
+      return;
+    }
+    this.lastStatsUpdateMs = nowMs;
     this.debugPanel.setRuntimeStats({
       frame,
       metrics: this.simulation.metrics,
@@ -306,6 +320,6 @@ export class GolfFlightApp {
       }
     }
 
-    this.renderCurrentFrame();
+    this.renderCurrentFrame(true);
   }
 }

@@ -9,8 +9,6 @@ import {
 import type { GraphicsQuality } from "../types/simulation";
 import { DEFAULT_GRAPHICS_QUALITY, QUALITY_PRESETS, TONE } from "./renderConfig";
 
-const MSAA_SAMPLES = 4;
-
 // The pipeline renders in HDR, so bloom only picks up what is far brighter
 // than sunlit grass or sand: the sun disc, its glare on the water, the ball.
 const BLOOM_THRESHOLD = 2.5;
@@ -49,22 +47,27 @@ const configureImageProcessing = (configuration: ImageProcessingConfiguration): 
   configuration.colorCurvesEnabled = true;
 };
 
+const applyAntiAliasingAndBloom = (pipeline: DefaultRenderingPipeline, quality: GraphicsQuality): void => {
+  const preset = QUALITY_PRESETS[quality];
+  pipeline.samples = preset.msaaSamples;
+  pipeline.fxaaEnabled = preset.msaaSamples <= 1;
+  pipeline.bloomEnabled = preset.bloom;
+};
+
 /**
- * HDR post stack: MSAA, a restrained bloom, ACES tone mapping, and SSAO for
+ * HDR post stack: MSAA or FXAA, a restrained bloom, ACES tone mapping, and SSAO for
  * contact shading where the quality preset allows it.
  */
 export const createPostProcessing = (scene: Scene, cameras: Camera[]): PostProcessController => {
   configureImageProcessing(scene.imageProcessingConfiguration);
 
   const pipeline = new DefaultRenderingPipeline("scene-pipeline", true, scene, cameras);
-  pipeline.samples = MSAA_SAMPLES;
-  pipeline.fxaaEnabled = false;
-  pipeline.bloomEnabled = true;
   pipeline.bloomThreshold = BLOOM_THRESHOLD;
   pipeline.bloomWeight = BLOOM_WEIGHT;
   pipeline.bloomKernel = BLOOM_KERNEL;
   pipeline.bloomScale = BLOOM_SCALE;
   pipeline.imageProcessingEnabled = true;
+  applyAntiAliasingAndBloom(pipeline, DEFAULT_GRAPHICS_QUALITY);
 
   const ssao = SSAO2RenderingPipeline.IsSupported
     ? new SSAO2RenderingPipeline(SSAO_PIPELINE_NAME, scene, { ssaoRatio: SSAO_RATIO, blurRatio: 1 }, cameras)
@@ -88,6 +91,7 @@ export const createPostProcessing = (scene: Scene, cameras: Camera[]): PostProce
 
   return {
     setQuality(quality) {
+      applyAntiAliasingAndBloom(pipeline, quality);
       const wantSsao = QUALITY_PRESETS[quality].ssao && ssao !== null;
       if (wantSsao === ssaoAttached) {
         return;

@@ -142,6 +142,15 @@ export interface QualityPreset {
   /** Cascades used when cascadedShadows is on. */
   shadowCascades: number;
   ssao: boolean;
+  /**
+   * Multisampling of the HDR scene target. It is the single most expensive
+   * pass on an integrated GPU (around 6 ms at 1600 x 900 on a Radeon 780M,
+   * at 2 samples as much as at 4), and it does nothing for alpha-tested
+   * foliage, so presets without it use FXAA instead.
+   */
+  msaaSamples: number;
+  /** Bloom only catches the sun's glare on water and the ball's highlight. */
+  bloom: boolean;
   /** Cross-fade that hides terrain texture repetition, at twice the texture fetches. */
   terrainAntiTiling: boolean;
   /** Planar reflection of trees and banks in the pond; otherwise it mirrors only the sky. */
@@ -160,6 +169,8 @@ export const QUALITY_PRESETS: Record<GraphicsQuality, QualityPreset> = {
     shadowMapSizePx: 1024,
     shadowCascades: 1,
     ssao: false,
+    msaaSamples: 1,
+    bloom: false,
     terrainAntiTiling: false,
     waterReflection: false,
     grassDensity: 0.55,
@@ -167,8 +178,11 @@ export const QUALITY_PRESETS: Record<GraphicsQuality, QualityPreset> = {
   high: {
     cascadedShadows: true,
     shadowMapSizePx: 2048,
-    shadowCascades: 3,
+    // Two cascades: a third cost ~3 ms of tree depth passes for a sharper midground.
+    shadowCascades: 2,
     ssao: true,
+    msaaSamples: 4,
+    bloom: true,
     terrainAntiTiling: true,
     waterReflection: true,
     grassDensity: 1,
